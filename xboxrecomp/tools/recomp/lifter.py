@@ -3900,6 +3900,33 @@ class Lifter:
         if m == "ffree":
             # Only the tag word changes; the runtime keeps no tags.
             return [f"/* ffree {insn.op_str}: tag only */"]
+        # fcmovCC st(0), st(i): conditional move on the flags of the last
+        # fcomi/fucomi, which this lifter keeps as g_fp_cmp (-1 less, 0 equal,
+        # 1 greater, 2 unordered = CF ZF PF all set). Same conditions as the
+        # jcc mapping above. Assumes the flags came from an FPU compare, which
+        # is how compilers emit fcmov.
+        fcmov = {
+            "fcmovb": "(g_fp_cmp < 0 || g_fp_cmp == 2)",
+            "fcmove": "(g_fp_cmp == 0 || g_fp_cmp == 2)",
+            "fcmovbe": "(g_fp_cmp != 1)",
+            "fcmovu": "(g_fp_cmp == 2)",
+            "fcmovnb": "(g_fp_cmp == 0 || g_fp_cmp == 1)",
+            "fcmovne": "(g_fp_cmp == -1 || g_fp_cmp == 1)",
+            "fcmovnbe": "(g_fp_cmp == 1)",
+            "fcmovnu": "(g_fp_cmp != 2)",
+        }
+        if m in fcmov and len(ops) == 2 and ops[1].type == "reg":
+            src = self._st_expr(self._st_index(ops[1].reg))
+            return [f"if {fcmov[m]} fp_top() = {src}; /* {m} {insn.op_str} */"]
+        if m == "fxtract":
+            # st0 = x  ->  st1 = unbiased exponent, st0 = significand in [1, 2).
+            # frexp gives [0.5, 1), hence the shift by one. Zero: exponent -inf
+            # and significand zero; inf and NaN pass through.
+            return ["{ double _x = fp_top(), _m; int _e;"
+                    " if (_x == 0.0) { fp_top() = -INFINITY; fp_push(_x); }"
+                    " else if (isinf(_x) || _x != _x) { fp_top() = isinf(_x) ? INFINITY : _x; fp_push(_x); }"
+                    " else { _m = frexp(_x, &_e); fp_top() = (double)(_e - 1); fp_push(_m * 2.0); } }"
+                    " /* fxtract */"]
 
         return [f"/* FPU: {m} {insn.op_str} */"]
 

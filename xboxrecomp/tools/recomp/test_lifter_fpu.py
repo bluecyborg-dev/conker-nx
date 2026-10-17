@@ -29,6 +29,22 @@ class FpuLifterTest(unittest.TestCase):
             ["g_fp_top = (g_fp_top + 7u) & 7u; /* fdecstp */"],
         )
 
+    def test_fcmov_moves_on_the_last_fpu_compare(self):
+        insn = Instruction(0, 2, "fcmovnbe", "st(0), st(2)", "dbd2")
+        insn.operands = [Operand(type="reg", reg="st(0)"), Operand(type="reg", reg="st(2)")]
+
+        self.assertEqual(
+            Lifter().lift_instruction(insn),
+            ["if (g_fp_cmp == 1) fp_top() = g_fp_stack[(g_fp_top + 2) & 7];"
+             " /* fcmovnbe st(0), st(2) */"],
+        )
+
+    def test_fxtract_pushes_the_significand_over_the_exponent(self):
+        out = Lifter().lift_instruction(Instruction(0, 2, "fxtract", "", "d9f4"))
+        self.assertEqual(len(out), 1)
+        self.assertIn("frexp(_x, &_e)", out[0])
+        self.assertIn("fp_top() = (double)(_e - 1); fp_push(_m * 2.0);", out[0])
+
     def test_fst_does_not_pop_and_fstp_does(self):
         operand = Operand(type="mem", mem_base="esp", mem_disp=0x18,
                           mem_size=4)
