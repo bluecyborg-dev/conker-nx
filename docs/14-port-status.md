@@ -18,12 +18,11 @@ issues first, then performance** (30 FPS, 60 if possible, low input lag).
 depth-of-field and `fcmov`/`fxtract` changes, and the Beach Dead seed), not yet run on hardware. Run it twice: the first run fills the new shader/pipeline cache in
 `sdmc:/switch/conker/`, the second shows the intro without the compile stall.
 
-**Last hardware run (2026-10-17, NRO `e807fd88`, log `run/net_logs/20261017-064742.log`):** the user played
-from boot to the training level. Intro audio lost after under a second; static bursts on menu selections, in
-the first cutscene and more often in gameplay; minor stutters in the menu and the movie; Conker's tail
-purple; some cutscene shots blurry; two shadows following Conker. Gameplay 20.0 FPS (50 ms frames, 526
-draws), no `[ICALL]`, crash or `0xCE01`. Per thread: game 28 % of a core, the GPU executor 71 %; the
-emulated vblank ran at 26–33 Hz instead of 60.
+**Last hardware run (2026-10-17, NRO `688d985e`, log `run/net_logs/20261017-145325.log`):** played by the
+user. Sound fixed (no static); the cutscene blur is still there; main-menu transitions a bit slow; the frame
+rate drops a little when the camera moves; still some very minor stutters. **Released as version 0.8.**
+Next focus: stable 30 FPS (60 if possible) by using the console's hardware better, without lowering asset or
+game quality.
 
 ## Milestones
 
@@ -81,6 +80,7 @@ and say how.
     `test_lifter_fpu.py`). The title tavern renders. How it was found, step by step: 2026-10-17 entries in
     [09-bringup-log.md](09-bringup-log.md) and [15-black-screen-investigation-summary.md](15-black-screen-investigation-summary.md).
 - [x] **Static ("heavy rain", TV noise) on menu selections, in cutscenes and in gameplay** (Switch and Linux).
+  Confirmed fixed on the console (NRO `688d985e`, 2026-10-17).
   - Culprit: DirectSound gives the APU `MmGetPhysicalAddress()` of its buffers; for memory above RAM (the
     extended-VMA range at `0x74000000`) that is the VA passed through, and `apu_phys()` masked it to 26
     bits. A stream segment at `0x7415D7A0` was read from `0x0015D7A0`, the game's code, played as
@@ -105,14 +105,17 @@ and say how.
     shadow); the Vulkan samplers always used transparent black, and the shadow passes multiply the scene
     by the sample.
   - Fix (commit d300139): the sampler takes the nearest fixed border colour, colour before alpha.
-- [ ] **Some cutscene shots blurry, some sharp** (Switch, user report). Fixed in code, verify on the console.
+- [ ] **Some cutscene shots blurry, some sharp** (Switch, user report). **Still there on NRO `688d985e`**:
+  the depth fix below did not solve it.
   - Culprit: the depth of field reads the Z24S8 depth buffer as a `LIN_R8G8B8A8` texture to decide which
     pixels to blur; depth lives in a Vulkan image and never reached guest memory, so the mask came from
     stale bytes. (The hangover shot at the start of the training level is blurred on purpose.)
   - Fix (commit 00f1cb4): a texture at a depth buffer's address is a colour image converted from the depth
     on the GPU (R G B = the 24-bit depth's bytes). The title tavern now blurs its near foreground and keeps
     the bar sharp; not yet compared with the original game.
-- [ ] **Minor stutters in the menu and the intro movie** (Switch, user report; low priority).
+- [ ] **Minor stutters in the menu and the intro movie** (Switch, user report; low priority). Still some
+  very minor stutters with the shader cache in place (NRO `688d985e`). Main-menu transitions are a bit slow
+  (lowest priority).
   - Culprit: shader/pipeline compiles on first use (no cache until now) and `[hitch]` frames of 50–120 ms
     in the movie.
   - Fix: re-check with the cache in place.
@@ -148,6 +151,8 @@ and say how.
   - Fix (done, verified on hardware 2026-10-17 with NRO `3f85b158`): 6ab1239 commits 2 MB granules once.
     The run logged no `0xCE01` and did not need the shared-memory fallback even once (the run with NRO
     `31500df5` used it 12 times).
+- [ ] **Frame rate drops when the camera moves** (Switch, NRO `688d985e`, user report). Part of the
+  performance work below.
 - [ ] **Switch runs at 20 FPS** (front end 540–860 draws; gameplay in the training level 526 draws, steady
   50 ms frames, NRO `e807fd88`). The emulated vblank ran at 26–33 Hz instead of 60 in that run: if the
   game paces itself on vblank, that alone can hold it at 20. Check the vblank thread first.

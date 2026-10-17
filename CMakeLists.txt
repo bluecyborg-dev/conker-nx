@@ -139,7 +139,7 @@ if(NINTENDO_SWITCH)
     # The release lives here, not in the cache: a cached default stays at
     # whatever the build directory was first configured with.
     # -DCONKER_SWITCH_VERSION_OVERRIDE=x sets another one.
-    set(CONKER_SWITCH_VERSION "0.0.1")
+    set(CONKER_SWITCH_VERSION "0.8")
     if(CONKER_SWITCH_VERSION_OVERRIDE)
         set(CONKER_SWITCH_VERSION "${CONKER_SWITCH_VERSION_OVERRIDE}")
     endif()

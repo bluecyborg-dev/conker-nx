@@ -445,3 +445,11 @@ only the newest `KEEP_DUMPS` (300) dumps while running.
   thread sat in D3D's GPU wait (`sub_0053C190` from `sub_00218220`) on the event the PGRAPH handler sets,
   while the GPU executor was idle. Six more class changes with `CONKER_D3D_TRACE=1` did not reproduce it.
   Recorded in the status as a lost wake-up to chase with the watchdog.
+
+## 2026-10-17: console run of NRO `688d985e`; version 0.8
+
+The user played the build with every fix so far (log `run/net_logs/20261017-145325.log`): the static is gone;
+the cutscene blur is still there (the depth-of-field change did not fix it); main-menu transitions are a bit
+slow; the frame rate drops a little when the camera moves; some very minor stutters remain. The launch
+arguments now reach the profiler (`[prof] sampling ...` in the log). This state was tagged **v0.8** (NRO
+version 0.8). Next: performance, using the hardware better rather than lowering quality.
