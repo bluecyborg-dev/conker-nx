@@ -161,6 +161,7 @@ typedef struct {
      * changes whenever any of them does (never 0). */
     float           attr_const[NV2A_RAW_ATTRS][4];
     uint32_t        attr_const_gen;
+    uint32_t        frame_trace;     /* RECOMP_FRAME_TRACE is armed for this draw */
     /* Vertex-memory epoch: changes at every semaphore release and trap
      * (after which the title may reuse buffers the GPU has finished with)
      * and around every inline-array batch. Two batches with equal epochs

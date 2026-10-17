@@ -120,7 +120,125 @@ a frame dump every N flips) and the new draw-skip switches (see [07-debugging.md
 |---|---|---|---|
 | 1 | Whole flythrough black | Bisection by blend mode: `RECOMP_SKIP_BLEND=306/0` (skip `DST_COLOR × ZERO` draws) brought the picture back. Those are three projected-shadow passes multiplying the screen by 128×128 / 64×64 shadow maps. The maps are **R5G6B5** surfaces (`SET_SURFACE_FORMAT` 0x07070213: colour format 3, swizzled 128×128) cleared with `0x0000FFFF`, white in R5G6B5; the renderer keeps every colour surface as ARGB8888 and used the raw value, so the maps were cyan (surface dump) and the multiply turned the scene black | **fixed**: `clear_color_argb()` in `nv2a_pb_exec.c` widens R5G6B5 / X1R5G5B5 clear values before the back end sees them. First flythrough frames (rainy cobblestones) now draw |
 | 2 | From frame ~4,300: a black 256×256 picture | Frame dumps were 341×256 instead of 853×480. `vk_flip()` presented `s_last`, the last surface drawn **or cleared**; after compositing its glow onto the back buffer the game clears its 256×256 glow target (`80CEC180`), so that was shown | **fixed**: `vk_flip()` presents the last surface drawn in the frame (`s_last_drawn`), falling back to the last one touched |
-| 3 | Still black (now full size), and even "good" frames only show the ground next to the camera | Forcing the back-buffer clear to red (temporary hack) gave red frames with only a vignette and rain: the scene geometry is **not rasterised at all**, not drawn black. Skipping every draw after the opaque ones (`RECOMP_SKIP_DRAWS=263-999`) changes nothing. Combiner, fog (linear, enabled, colour `FF43628F`, params 1/1), blend and depth state of the opaque draws are identical in a good frame (4,050) and a black one (4,847). Every scene draw has `SET_CONTROL0` = `0x00100001`: bit 20 `Z_PERSPECTIVE_ENABLE` = **w-buffering**; `SET_ZMIN_MAX_CONTROL` = 1. The CPU interpreter's first vertices sit at z = 16.8–17.8 M (zmax 16,777,215) and mostly with w < 0 in the black frame | **open**. The renderer treats `oPos.z` as a 0..zmax depth and clips it; in w-buffer mode the depth is eye-space w scaled by the clip range. Plan in [14-port-status.md](14-port-status.md) |
+| 3 | Still black (now full size), and even "good" frames only show the ground next to the camera | Forcing the back-buffer clear to red (temporary hack) gave red frames with only a vignette and rain: the scene geometry is **not rasterised at all**, not drawn black. Skipping every draw after the opaque ones (`RECOMP_SKIP_DRAWS=263-999`) changes nothing. Combiner, fog (linear, enabled, colour `FF43628F`, params 1/1), blend and depth state of the opaque draws are identical in a good frame (4,050) and a black one (4,847). Every scene draw has `SET_CONTROL0` = `0x00100001`; `SET_ZMIN_MAX_CONTROL` = 1. Earlier CPU vertex traces show scene `oPos.z` values around 14–27 M against clip max 16,777,215, and mostly negative actual `oPos.w` for some groups. | **open; cause under review**. Earlier bit-20/W-buffer interpretation was incorrect: the vendored header defines `Z_PERSPECTIVE_ENABLE` at bit 16, which is clear in this value; bit 20 is not defined there. Clear bit 16 may imply W-depth, but confirm semantics before implementing. The clip trace is 0..16,777,215. See the reassessment below and [14-port-status.md](14-port-status.md) |
+
+**Reassessment (2026-10-17):** the first diagnosis misidentified bit 20 of `SET_CONTROL0` as
+`Z_PERSPECTIVE_ENABLE`. The vendored header places that named bit at bit 16 (`0x00010000`), so the
+observed `0x00100001` has the named bit clear and bit 20 set but undocumented in that header. The trace
+does confirm the clip range and shows vertex-program output values beyond it, but does not by itself
+prove which depth representation the hardware is using or that depth clipping is the only cause. The
+current investigation is to compare generated vertex output and clip conversion against xemu, and confirm
+the NV2A state semantics before changing depth behavior.
+
+**Full-draw position trace (2026-10-17, Linux frame after flip 4655):** the corresponding 640×480 frame
+dump is black. The new `[FTRACE POS CPU]` diagnostic runs the CPU position interpreter for every submitted
+index and reports positive-`oPos.w` bounds separately; it is an estimate, not GPU readback. Of 213 draws
+to back buffer `80964000`, 181 had more than four indices (82,750 indices total). Their CPU-estimated
+positive-`oPos.w` positions had no vertices inside the 640×480 bounds; only 6 draw bounds intersected the
+screen, covering 4,722 indices. Of 53,043 positive-`oPos.w` positions, 45,640 were within the captured
+depth interval. This makes VSH position/clip conversion the next comparison target, but does not establish
+that Vulkan produced the same positions or that depth is the cause.
+
+**Depth A/B probes (2026-10-17, Linux `conker-dev`):** added runtime-only Vulkan switches
+`RECOMP_VK_NO_DEPTH=1` (disables tests and writes globally) and `RECOMP_VK_DEPTH_ALWAYS=1` (keeps enabled
+tests and writes, but forces the compare op to ALWAYS). Both builds completed. The no-depth run remained
+black at frame 4,800 (frame 3,840 showed only rain); the depth-always run was black at frames 3,780,
+4,020 and 4,320. These broad overrides did not recover the scene, but they are not conclusive: they also
+change shadow-pass visibility and/or scene draw ordering. Keep both off by default and do not mark the
+depth issue resolved. The scoped follow-up below preserves shadow and post-process depth behavior.
+
+**Scoped depth probes (2026-10-17, Linux `conker-dev`):**
+`RECOMP_VK_DEPTH_ALWAYS_OPAQUE=1` forces the compare function to ALWAYS only when blending is disabled
+and the target is a full-size surface; depth writes stay enabled, and shadow/glow targets keep their
+original compare function. It exposed floor/room geometry in captured frames 3,780, 4,020 and 4,140;
+frame 4,320 remained black. `RECOMP_VK_DEPTH_GREATER_OPAQUE=1` applies GREATER to the same draw class:
+frame 3,780 showed the room, but frame 4,020 was black, as were frames 4,140, 4,320 and 4,530. The
+normal depth comparison therefore rejects visible opaque geometry in at least some views, but changing
+the compare op alone does not prevent the later blackout or establish the correct depth function. The
+debug switches log the first target surface and are off by default. A later default-state trace found the
+main depth clear and compare state unchanged across the late blackout; compare generated VSH positions
+with the CPU estimate next.
+
+**Depth-state trace (2026-10-17, Linux `conker-dev`, frames 4,120–4,340):** added
+`RECOMP_VK_DEPTH_TRACE=<first>-<last>` to log depth clears and opaque full-size draw state in a selected
+Vulkan frame window. The main scene alternates color surfaces `80964000` and `80A90000` against ZETA
+`80BC0000`; each frame clears depth to `1.0` (`0xFFFFFF` of `0xFFFFFF`) with compare `0x203` (LEQUAL),
+depth test and writes enabled, `SET_ZMIN_MAX_CONTROL=1`, and clip range 0..16,777,215. This state is
+unchanged across the window, including the baseline black captures at frames 4,140 and 4,320. The late
+blackout is not explained by a change in depth clear or compare state. This does not rule out invalid or
+out-of-range generated vertex depth; the next comparison is generated Vulkan VSH output against the CPU
+position estimate for the same draws. The scoped trace itself compiled and completed through frame 4,381.
+
+**First black-frame position trace and attribute-path A/B (2026-10-17, Linux `conker-dev`, flip 4,321):**
+the matching frame 4,320 capture is fully black. The per-draw CPU vertex-program estimate covered 497
+back-buffer draws (`80A90000`, 139,085 indices): only three index positions were inside 640×480, one
+from each of three full-screen composite quads; no world-geometry positions were inside the view. Of
+50,028 estimated positive-`oPos.w` positions, 45,092 were within the recorded depth interval. This is
+the CPU interpreter's estimate, not Vulkan shader output or GPU readback, so it does not prove the GPU
+received the same positions. A second frame 4,320 run with `RECOMP_GL_DIRECT=0` (forcing Vulkan to use
+the converted attribute path) was also black and showed the same pattern: 498 draws / 139,402 indices,
+three in-view positions from full-screen quads, and no in-view world geometry. This makes the direct
+vertex-format path an unlikely sole cause, but does not rule out a shared input or vertex-program
+translation issue. Next compare CPU-interpreted `oPos` to generated Vulkan VSH output for matching
+attributes and draws before changing depth behavior.
+
+**Cross-backend reproduction (2026-10-17, Linux `conker-dev`):** rebuilt `build/linux-gl` from the current
+source and ran the same title route. The OpenGL dump at frame 4,320 is also fully black; frames 4,313–4,326
+continued submitting roughly 540–732 draws per frame. Together with the Vulkan capture, this shows the
+late black scene is not Vulkan-specific. The renderers share CPU-side vertex-program state and GLSL
+translation, so compare those shared inputs and generated positions before pursuing API-specific depth or
+raster behavior. OpenGL GPU-position readback is now available; it does not directly verify Vulkan or
+Switch output.
+
+**VSH reference check (2026-10-17):** upstream xemu's programmable VSH tail converts screen-space x/y to
+clip-space, scales z by the programmed clip maximum, and multiplies xyz by clip w
+([`vsh-prog.c`](https://github.com/xemu-project/xemu/blob/master/hw/xbox/nv2a/pgraph/glsl/vsh-prog.c),
+[`vsh.c`](https://github.com/xemu-project/xemu/blob/master/hw/xbox/nv2a/pgraph/glsl/vsh.c)). The port's
+generated Vulkan path has the same broad conversion shape. This source comparison is not a per-draw output
+match; the OpenGL result below supplies a per-draw comparison for the tested frame.
+
+**OpenGL VSH output capture (2026-10-17, Linux `conker-dev`, frame after flip 2667):** added
+`RECOMP_GL_VSH_TRACE=1` to capture the generated programmable vertex shader's `oPos` and
+`gl_Position` through transform feedback on the next `RECOMP_FRAME_TRACE` frame. The first readback was
+invalid because unbinding transform-feedback index 0 also cleared the generic buffer binding; rebinding
+the buffer before `glGetBufferSubData` fixed it. On black frame 2668, the GPU readback covered 47 triangle
+batches to the 640×480 back buffer. For the 2,382-index world batch, CPU and GPU both reported 1,537
+positive-`oPos.w` vertices, zero inside the view, and nearly identical bounds (CPU
+`-16366.1,-132156.5:-79.2,785.6`; GPU `-16366.2,-132157.4:-79.2,785.5`). The 1,830-index batch also
+matched (CPU `-7750.0,-61827.4:-129.1,378.5`; GPU `-7750.0,-61827.6:-129.1,378.4`). Sampled `oPos`
+and clip-space values agreed too. The in-view rectangle was a full-screen post-process quad, not world
+geometry. This verifies that OpenGL VSH outputs match the CPU estimate for these draws and that the
+missing world geometry is projected outside the viewport in this view. It does not identify whether the
+shared guest attributes, VSH constants, program state, or camera state is wrong, and it does not directly
+verify Vulkan or Switch GPU output. Next inspect those shared inputs and state and compare the same guest
+frame with a reference implementation before changing depth or clip behavior.
+
+**Corrected OpenGL VSH capture (2026-10-17, Linux `conker-dev`, black dump frame 2100):** the first
+triangle-strip probe replayed the batch as triangle lists, which duplicated strip vertices in transform
+feedback and still rasterized the diagnostic draw. Reworked it to replay the same index sequence as
+`GL_POINTS` with `GL_RASTERIZER_DISCARD` enabled. This captures one generated vertex per input index and
+does not write pixels during the probe. The 640×480 frame dump remains fully black. For the 747-index
+world batch, `[FTRACE POS CPU]` reports 747 negative-`oPos.w` positions; the GPU point capture reports
+zero positive-w positions. For the 1,082-index batch, CPU reports 1,002 negative-w and 80 positive-w
+positions, zero inside the view, and positive-w bounds `-31283.3,-247017.6:-483.7,-2521.8`; GPU reports
+the same 80 positive-w positions, zero in view, and bounds `-31283.1,-247015.9:-483.7,-2521.8`. The
+frame trace is after flip 2104 and the GPU capture labels it frame 2105. These per-index results confirm
+the CPU/GPU position match for these two OpenGL batches, with world vertices far outside the viewport.
+They do not identify whether the shared attributes, constants, camera state or another guest-side input
+is wrong, and they do not verify Vulkan or Switch output. The 747-index batch's attributes, VSH program
+and constants were dumped for the next comparison. Decoding the 33-slot program shows no MAC ARL
+instruction (opcode 13); upstream xemu maps opcode 13 to ARL and uses the same `floor(src + 0.001)` bias
+as the port, so ARL rounding is not implicated for this batch ([reference](https://github.com/xemu-project/xemu/blob/master/hw/xbox/nv2a/pgraph/glsl/vsh-prog.c)).
+Other instruction semantics and guest inputs remain to be checked. The issue remains open.
+
+**Final scoped depth probe (2026-10-17, Linux `conker-dev`, Vulkan, black dump frame 2100):** rebuilt
+`build/linux-vk` from current source and reran the scripted title route with
+`RECOMP_VK_DEPTH_ALWAYS_OPAQUE=1`. The log confirms the override forced `ALWAYS` only for opaque draws
+to full-size surfaces. The 640×480 frame 2,100 capture is still completely black; frame 2,101 submitted
+700 draws. The run continued through at least frame 2,792 without a recorded exception or renderer crash,
+then was stopped after the target capture. This rules out opaque depth rejection as a sufficient fix for
+this menu view; it does not rule out clip rejection, guest-state errors, other depth behavior, or a
+Switch-specific difference. No NRO was uploaded.
 
 Draw structure of a flythrough frame (useful for later bisection): ~30 draws into the three shadow maps
 (`8224F900`, `82257980`, `8225FA00`), ~230 opaque scene draws into the back buffer (`80964000` /
@@ -143,5 +261,5 @@ Log `run/net_logs/20261017-020541.log` (the first upload attempt, `-020451.log`,
 NetLoader was not open yet). Boot and intro as before; after skipping the intro the screen stays **black with
 the menu music playing**. 20 FPS (50 ms frames, 605–669 draws), frame 1,553 reached (the user quit), no `[ICALL]`, `[STUB]` or
 exception. No `0xCE01` and no shared-memory fallback at all: the 2 MB extended-VMA granules (6ab1239) are
-verified on hardware. The black picture is the w-buffering problem found on the Linux bench (most of the
-scene clipped), not a console-only fault.
+verified on hardware. The black picture matches the unresolved Linux renderer problem; the depth/clip
+cause has not been established, so a console-specific cause remains possible.

@@ -31,6 +31,7 @@ Written 2026-10-16 from two sources:
 | [12-porting-guide.md](12-porting-guide.md) | Technical architecture and reusable workflow for future original-Xbox-to-Switch ports |
 | [13-build-process.md](13-build-process.md) | Reproducible regeneration, container validation, Switch build, staging, and upload process |
 | [14-port-status.md](14-port-status.md) | **Current state**: last milestone, milestone list, open issues with culprit and fix (checklist) |
+| [15-black-screen-investigation-summary.md](15-black-screen-investigation-summary.md) | Consolidated attempts, evidence, results, and next steps for the unresolved black/missing scene |
 
 ## The five things to remember
 

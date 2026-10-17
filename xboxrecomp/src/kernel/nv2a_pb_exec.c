@@ -3387,6 +3387,7 @@ static void raw_batch(void)
     rb.attrs = s_raw_attrs;
     rb.indices = s_raw_idx;
     rb.index_count = s_gpu.idx_count;
+    rb.frame_trace = s_ftrace_on;
     rb.regs = s_reg;
     rb.vp_program = (const uint32_t (*)[4])s_vp.prog;
     rb.vp_slots = VP_SLOTS;
@@ -3418,12 +3419,17 @@ static void raw_batch(void)
     if (nv2a_raw_batch_hook)
         nv2a_raw_batch_hook(&rb, s_raw_attrs);
     if (s_ftrace_on) {
+        static int vsh_inputs_dumped;
         /* RECOMP_FRAME_TRACE: one line per draw of the traced frame, with
          * where the first vertices land (the CPU interpreter's screen x, y,
          * z and 1/w) -- enough to tell a batch drawn off screen, behind the
          * eye or depth-failed from one never sent. */
         const Nv2aRenderState *r = &s_gpu.rs;
         float q[3][4] = {{0}};
+        float xmin = INFINITY, ymin = INFINITY, xmax = -INFINITY, ymax = -INFINITY;
+        float fxmin = INFINITY, fymin = INFINITY, fxmax = -INFINITY, fymax = -INFINITY;
+        uint32_t nvalid = 0, ninside = 0, nnegw = 0, nzrange = 0;
+        uint32_t nfront = 0, nfrontinside = 0, nfrontzrange = 0;
         int k;
         for (k = 0; k < 3 && (uint32_t)k < s_gpu.idx_count; k++)
             if (!fetch_position(s_gpu.idx[k], q[k]))
@@ -3453,8 +3459,87 @@ static void raw_batch(void)
                 /* fog enable, mode, colour, params 0/1 */
                 s_reg[0x02A4 / 4], s_reg[0x029C / 4], s_reg[0x02A8 / 4],
                 s_reg[0x09C0 / 4], s_reg[0x09C4 / 4],
-                /* SET_CONTROL0 (w-buffer), SET_ZMIN_MAX_CONTROL */
+                /* raw SET_CONTROL0 and SET_ZMIN_MAX_CONTROL */
                 s_reg[0x0290 / 4], s_reg[0x1D78 / 4], r->depth_min, r->depth_max);
+        /* The three vertices above can misrepresent a large indexed mesh.
+         * Summarize every index in this one traced frame so the bounds show
+         * whether the draw reaches the render area at all. p[3] is 1/oPos.w,
+         * so its sign still identifies the sign of the clip-space w. */
+        for (uint32_t i = 0; i < s_gpu.idx_count; i++) {
+            float p[4];
+            if (!fetch_position(s_gpu.idx[i], p)
+                    || !isfinite(p[0]) || !isfinite(p[1])
+                    || !isfinite(p[2]) || !isfinite(p[3]))
+                continue;
+            nvalid++;
+            if (p[0] < xmin) xmin = p[0];
+            if (p[1] < ymin) ymin = p[1];
+            if (p[0] > xmax) xmax = p[0];
+            if (p[1] > ymax) ymax = p[1];
+            if (p[0] >= s_gpu.clip_x && p[0] < s_gpu.clip_x + s_gpu.clip_w
+                    && p[1] >= s_gpu.clip_y && p[1] < s_gpu.clip_y + s_gpu.clip_h)
+                ninside++;
+            if (p[3] < 0.0f)
+                nnegw++;
+            if (r->depth_max > r->depth_min
+                    && p[2] >= r->depth_min && p[2] <= r->depth_max)
+                nzrange++;
+            if (p[3] > 0.0f) {
+                nfront++;
+                if (p[0] < fxmin) fxmin = p[0];
+                if (p[1] < fymin) fymin = p[1];
+                if (p[0] > fxmax) fxmax = p[0];
+                if (p[1] > fymax) fymax = p[1];
+                if (p[0] >= s_gpu.clip_x && p[0] < s_gpu.clip_x + s_gpu.clip_w
+                        && p[1] >= s_gpu.clip_y && p[1] < s_gpu.clip_y + s_gpu.clip_h)
+                    nfrontinside++;
+                if (r->depth_max > r->depth_min
+                        && p[2] >= r->depth_min && p[2] <= r->depth_max)
+                    nfrontzrange++;
+            }
+        }
+        if (nvalid)
+            fprintf(stderr, "[FTRACE POS CPU] surf %08X indices %u valid %u in %u negw %u zrange %u box %.1f,%.1f:%.1f,%.1f"
+                    " | front %u in %u zrange %u box %.1f,%.1f:%.1f,%.1f\n",
+                    rb.color_va, s_gpu.idx_count, nvalid, ninside, nnegw, nzrange,
+                    xmin, ymin, xmax, ymax, nfront, nfrontinside, nfrontzrange,
+                    nfront ? fxmin : NAN, nfront ? fymin : NAN,
+                    nfront ? fxmax : NAN, nfront ? fymax : NAN);
+        /* One large world batch is enough to see what fed an off-screen VSH
+         * result. Keep the dump scoped to the first substantial traced
+         * back-buffer batch so ordinary frame traces remain compact. */
+        if (!vsh_inputs_dumped && rb.xform == 2
+                && (rb.color_va == 0x80964000 || rb.color_va == 0x80A90000)
+                && rb.index_count >= 700) {
+            uint32_t pc, a, k;
+            vsh_inputs_dumped = 1;
+            fprintf(stderr, "[FTRACE VSH INPUT] surf %08X idx %u prog_gen %u const_gen %u start %u attr %04X direct %04X\n",
+                    rb.color_va, rb.index_count, rb.vp_prog_gen, rb.vp_const_gen,
+                    rb.vp_start, rb.attr_present, rb.attr_direct);
+            for (pc = rb.vp_start; pc < rb.vp_slots && pc < rb.vp_start + 40; pc++) {
+                fprintf(stderr, "[FTRACE VSH PROG] %u %08X %08X %08X %08X\n", pc,
+                        rb.vp_program[pc][0], rb.vp_program[pc][1],
+                        rb.vp_program[pc][2], rb.vp_program[pc][3]);
+                if (rb.vp_program[pc][3] & 1)
+                    break;
+            }
+            for (a = 0; a < NV2A_RAW_ATTRS; a++) {
+                if (!(rb.attr_present & (1u << a)))
+                    continue;
+                for (k = 0; k < 3 && k < rb.index_count; k++) {
+                    float val[4];
+                    if (fetch_attr(&s_gpu.attr[a], s_gpu.idx[k], val))
+                        fprintf(stderr, "[FTRACE VSH ATTR] a%u v%u %.7g %.7g %.7g %.7g\n",
+                                a, k, val[0], val[1], val[2], val[3]);
+                }
+            }
+            for (pc = 0; pc < rb.vp_const_count; pc++) {
+                const float *c = rb.vp_consts[pc];
+                if (c[0] != 0.0f || c[1] != 0.0f || c[2] != 0.0f || c[3] != 0.0f)
+                    fprintf(stderr, "[FTRACE VSH CONST] c%u %.7g %.7g %.7g %.7g\n",
+                            pc, c[0], c[1], c[2], c[3]);
+            }
+        }
     }
     s_backend->draw_raw(&rb);
     s_gpu.tris_drawn += s_gpu.idx_count / 3;

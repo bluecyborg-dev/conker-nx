@@ -25,6 +25,7 @@
  * Runtime switches:
  *   RECOMP_GL_DUMP=<prefix>[,every]  write presented frames as BMP
  *   RECOMP_GL_TRACE=1                shader sources and link errors
+ *   RECOMP_GL_VSH_TRACE=1            GPU oPos / gl_Position capture for a frame trace
  *   RECOMP_GL_WATCH=<hex va>         state, vertices and pixels read back for
  *                                    the first draws into / sampling that VA
  *   RECOMP_GL_SCALE=<k>              render surfaces at k times the title's
@@ -40,6 +41,7 @@
 #include "../kernel/nv2a_backend.h"
 
 #include <SDL.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -55,8 +57,24 @@ static SDL_GLContext s_ctx;
 static int           s_state;           /* 0 untried, 1 ready, -1 failed */
 static int           s_trace;
 static int           s_finish = -1;      /* RECOMP_GL_FINISH */
+static int           s_vsh_trace = -1;
+static GLuint        s_vsh_trace_buffer;
+static float        *s_vsh_trace_data;
+static size_t        s_vsh_trace_cap;
+static uint32_t      s_vsh_trace_draw;
 
 static int           s_new_obj;          /* this operation uses something new */
+
+static int vsh_trace_enabled(void)
+{
+    if (s_vsh_trace < 0) {
+        const char *e = getenv("RECOMP_GL_VSH_TRACE");
+        s_vsh_trace = e && *e == '1';
+        if (s_vsh_trace)
+            fprintf(stderr, "  [GL] VSH transform-feedback trace enabled; arm RECOMP_FRAME_TRACE for one frame\n");
+    }
+    return s_vsh_trace;
+}
 
 /* RECOMP_GL_FINISH: wait for the GPU after every operation, so a hard GPU
  * hang happens at the operation that causes it. Only operations that touch
@@ -1035,6 +1053,10 @@ static GlProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
     p->prog = glCreateProgram();
     glAttachShader(p->prog, v);
     glAttachShader(p->prog, fr);
+    if (vkey && vsh_trace_enabled()) {
+        static const GLchar *varyings[] = { "vTraceOPos", "gl_Position" };
+        glTransformFeedbackVaryings(p->prog, 2, varyings, GL_INTERLEAVED_ATTRIBS);
+    }
     glLinkProgram(p->prog);
     glDeleteShader(v);
     glDeleteShader(fr);
@@ -1599,6 +1621,87 @@ static int upload_vertices(const Nv2aRawBatch *b)
     return 1;
 }
 
+/* Capture the actual vertex-shader output for one CPU-frame-traced batch.
+ * Transform feedback records user oPos and built-in gl_Position before GL
+ * clipping, so their bounds can be compared with fetch_position()'s estimate. */
+static int gl_draw_vsh_trace(const Nv2aRawBatch *b, const GlSurf *s, uint32_t draw_no,
+                             GLsizei count, GLenum idx_type, GLintptr idx_at)
+{
+    size_t bytes, i;
+    uint32_t front = 0, inside = 0, zrange = 0;
+    float xmin = INFINITY, ymin = INFINITY, xmax = -INFINITY, ymax = -INFINITY;
+
+    if (!count || (size_t)count > SIZE_MAX / (8 * sizeof(float)))
+        return 0;
+    bytes = (size_t)count * 8 * sizeof(float);
+    if (bytes > (size_t)PTRDIFF_MAX)
+        return 0;
+    if (!s_vsh_trace_buffer)
+        glGenBuffers(1, &s_vsh_trace_buffer);
+    if (!s_vsh_trace_buffer)
+        return 0;
+    if ((size_t)count * 8 > s_vsh_trace_cap) {
+        float *p = (float *)realloc(s_vsh_trace_data, bytes);
+        if (!p) {
+            fprintf(stderr, "  [VSH GPU] host buffer allocation failed for %zu bytes\n", bytes);
+            return 0;
+        }
+        s_vsh_trace_data = p;
+        s_vsh_trace_cap = (size_t)count * 8;
+    }
+
+    glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER, s_vsh_trace_buffer);
+    glBufferData(GL_TRANSFORM_FEEDBACK_BUFFER, (GLsizeiptr)bytes, NULL, GL_STREAM_READ);
+    glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, s_vsh_trace_buffer);
+    /* Reissue the same index sequence as points. This runs the same vertex
+     * shader once per input index, including for triangle strips, without
+     * transform feedback duplicating shared strip vertices. Discard raster
+     * output so the diagnostic pass cannot change the traced frame. */
+    glEnable(GL_RASTERIZER_DISCARD);
+    glBeginTransformFeedback(GL_POINTS);
+    glDrawElements(GL_POINTS, count, idx_type, (const void *)(uintptr_t)idx_at);
+    glEndTransformFeedback();
+    glDisable(GL_RASTERIZER_DISCARD);
+    glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, 0);
+    /* glBindBufferBase also updates the generic target binding. Rebind the
+     * buffer before glGetBufferSubData so the readback target is not zero. */
+    glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER, s_vsh_trace_buffer);
+    glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0, (GLsizeiptr)bytes, s_vsh_trace_data);
+    glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER, 0);
+
+    for (i = 0; i < (size_t)count; i++) {
+        const float *o = s_vsh_trace_data + i * 8;
+        const float *p = o + 4;
+        float x, y, z;
+        if (!(o[3] > 0.0f) || !isfinite(p[0]) || !isfinite(p[1])
+                || !isfinite(p[2]) || !isfinite(p[3]) || fabsf(p[3]) < 1e-20f)
+            continue;
+        x = (p[0] / p[3] + 1.0f) * (float)s->w * 0.5f;
+        y = (p[1] / p[3] + 1.0f) * (float)s->h * 0.5f;
+        z = p[2] / p[3];
+        front++;
+        if (x < xmin) xmin = x;
+        if (y < ymin) ymin = y;
+        if (x > xmax) xmax = x;
+        if (y > ymax) ymax = y;
+        if (x >= 0.0f && x < (float)s->w && y >= 0.0f && y < (float)s->h)
+            inside++;
+        if (z >= -1.0f && z <= 1.0f)
+            zrange++;
+    }
+    fprintf(stderr, "[VSH GPU] frame %u draw %u surf %08X idx %d front %u in %u zrange %u"
+                    " box %.1f,%.1f:%.1f,%.1f\n",
+            s_frame + 1, draw_no, s->va, count, front, inside, zrange,
+            front ? xmin : NAN, front ? ymin : NAN, front ? xmax : NAN, front ? ymax : NAN);
+    if (count > 0) {
+        const float *o = s_vsh_trace_data;
+        const float *p = o + 4;
+        fprintf(stderr, "[VSH GPU] v0 oPos %.6g %.6g %.6g %.6g clip %.6g %.6g %.6g %.6g\n",
+                o[0], o[1], o[2], o[3], p[0], p[1], p[2], p[3]);
+    }
+    return 1;
+}
+
 static void gl_draw_raw(const Nv2aRawBatch *b)
 {
     GlSurf *s;
@@ -1909,7 +2012,18 @@ static void gl_draw_raw(const Nv2aRawBatch *b)
                     draws, s->va, s->w, s->h, b->prim, n, b->vertex_count,
                     b->attr_present, b->xform, b->vp_start, pk.shader_program, pk.control,
                     r[0x1B00 / 4], (r[0x1B04 / 4] >> 8) & 0xFF);
-        glDrawElements(mode, (GLsizei)n, idx_type, (const void *)(uintptr_t)idx_at);
+        if (!b->frame_trace)
+            s_vsh_trace_draw = 0;
+        if (vsh_trace_enabled() && b->frame_trace && b->xform == 2
+                && s->w >= 640 && s->h >= 480
+                && (mode == GL_TRIANGLES || mode == GL_TRIANGLE_STRIP)
+                && n >= 700) {
+            uint32_t trace_draw = ++s_vsh_trace_draw;
+            if (!gl_draw_vsh_trace(b, s, trace_draw, (GLsizei)n, idx_type, idx_at))
+                glDrawElements(mode, (GLsizei)n, idx_type, (const void *)(uintptr_t)idx_at);
+        } else {
+            glDrawElements(mode, (GLsizei)n, idx_type, (const void *)(uintptr_t)idx_at);
+        }
         gl_step_done("draw");
         if (s_watch_hit) {
             /* What the watched draw left: the target's centre and corner. */

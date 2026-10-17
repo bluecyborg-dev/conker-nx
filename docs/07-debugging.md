@@ -27,7 +27,13 @@
 | `RECOMP_SKIP_DRAWS=<lo>-<hi>` | drop draws lo..hi of every frame (counted from 0 after each flip) to bisect a wrong frame: skip a range, look at the dump, narrow it down |
 | `RECOMP_SKIP_BLEND=<src>/<dst>` (hex, e.g. `306/0`) / `RECOMP_SKIP_INLINE=1` | drop every draw with that blend pair / every inline-vertex draw |
 | `RECOMP_PSH_DUMP=1` | each new pixel-shader key (combiner stages, final combiner) and the GLSL generated for it |
-| `RECOMP_FRAME_TRACE` fields | per draw also: raw blend regs, texture-shader program, combiner control and factors, alpha test, surface format, fog (enable, mode, colour, params), `SET_CONTROL0` (bit 20 = w-buffer), `ZMIN_MAX_CONTROL`, clip range |
+| `RECOMP_FRAME_TRACE` fields | per draw also: raw blend regs, texture-shader program, combiner control and factors, alpha test, surface format, fog (enable, mode, colour, params), raw `SET_CONTROL0`, `ZMIN_MAX_CONTROL`, clip range |
+| `[FTRACE POS CPU]` (during `RECOMP_FRAME_TRACE`) | runs the CPU position interpreter over every submitted index and reports screen-bounds/depth-range counts and bounds, including a separate positive-`oPos.w` summary; this is an estimate, not GPU readback |
+| `RECOMP_GL_VSH_TRACE=1` with `RECOMP_FRAME_TRACE` (desktop OpenGL) | captures actual programmable VSH `oPos` and `gl_Position` through transform feedback for triangle draws to full-size surfaces; compare the same draw's `[VSH GPU]` summary with `[FTRACE POS CPU]` |
+| `RECOMP_GL_DIRECT=0` | disable direct guest-vertex reads for raw batches and convert attributes through `fetch_attr`; use as an A/B for direct vertex-format handling, not as a performance setting |
+| `RECOMP_VK_NO_DEPTH=1` / `RECOMP_VK_DEPTH_ALWAYS=1` | broad Vulkan depth probes: disable tests and writes, or force enabled tests to pass; affects all draws, including shadows, so not conclusive on its own |
+| `RECOMP_VK_DEPTH_ALWAYS_OPAQUE=1` / `RECOMP_VK_DEPTH_GREATER_OPAQUE=1` | force ALWAYS / GREATER depth compare for opaque draws to full-size surfaces; leaves shadow and post-process draws at their original state; diagnostic only |
+| `RECOMP_VK_DEPTH_TRACE=<first>-<last>` | log depth clears and opaque full-size draw depth state in the selected Vulkan frame range, including target, ZETA address, clear value, compare, and clip registers |
 | `tools/live_linux.sh start\|press\|frame\|log\|stop` | Linux bench in the background: append pad presses, grab the newest dumped frame |
 | `RECOMP_PB_EXEC=0` | no GPU: boot runs ~50× faster under the software path; follow it by file accesses |
 | `RECOMP_APU_TRACE`, `RECOMP_APU_VOICES`, `RECOMP_AUDIO_DUMP`, `RECOMP_APU_VOICE_DUMP` | audio (never judge audio from a traced run: the trace itself injects gaps) |
@@ -35,6 +41,23 @@
 | `RECOMP_NX_PROFILE=1\|2` | sampling profiler ([06](06-performance.md)) |
 | `*_LOG_SYNC=1`, `*_NO_LOG=1`, `RECOMP_QUIET` | logging modes |
 | `XBOX_LOG_LEVEL`, `RECOMP_USB_STATS`, `RECOMP_RUMBLE_TRACE`, `B3_D3D_TRACE`-style hook traces | subsystem logs |
+
+Keep raw register values in graphics traces and decode each field against its exact mask in the matching
+hardware header or emulator source. A mistaken bit label can turn a useful observation into a false cause.
+Label transformed-position diagnostics by their source: a CPU interpreter estimate can point to a suspect
+transform, but it does not prove what the generated GPU shader produced. On desktop OpenGL, the optional
+`RECOMP_GL_VSH_TRACE=1` readback can verify the generated output for a traced frame. If both outputs agree
+and the positions are outside the view, investigate shared vertex inputs, transform constants and guest
+camera state before changing clip or depth rules. The readback is OpenGL-specific; it does not directly
+verify Vulkan or Switch output.
+Reproduce the same deterministic frame on each available graphics backend. A failure shared by back ends
+that use the same shader translator narrows the search toward shared guest state, inputs, or translation;
+it does not by itself prove the generated GPU positions match.
+
+Treat global depth overrides as screening probes only. Disabling depth test and writes also removes draw
+ordering, while forcing every depth test to pass changes depth-tested shadow passes; neither result isolates
+depth rejection on the scene's opaque draws. Scope an A/B override to the target draws and leave shadow and
+post-process passes unchanged before concluding that depth is or is not the cause.
 
 ## Bug classes to hunt for (grep the log and `gen/` on every bring-up step)
 

@@ -39,6 +39,16 @@
  *   RECOMP_VK_LOD_BIAS=<b>           mip bias of mipmapped textures
  *                                    (default -0.25: a little sharper)
  *   RECOMP_VK_FXAA=0                 present with a plain blit, no FXAA
+ *   RECOMP_VK_NO_DEPTH=1             diagnostic: disable depth testing and
+ *                                    writes on all draws
+ *   RECOMP_VK_DEPTH_ALWAYS=1         diagnostic: keep depth writes, make
+ *                                    enabled depth tests pass
+ *   RECOMP_VK_DEPTH_ALWAYS_OPAQUE=1  diagnostic: force depth pass only for
+ *                                    opaque full-size surface draws
+ *   RECOMP_VK_DEPTH_GREATER_OPAQUE=1 diagnostic: use GREATER depth compare
+ *                                    only for opaque full-size surface draws
+ *   RECOMP_VK_DEPTH_TRACE=<first>-<last> log clears and depth state for
+ *                                    opaque full-size draws in this frame range
  *   RECOMP_PRESENT_CROP_Y=<n>        leave n logical rows out of the present
  *                                    at the top and at the bottom
  *   RECOMP_VK_VALIDATION=1           (Linux) enable the Khronos validation layer
@@ -76,6 +86,10 @@ static int s_trace;
 /* RECOMP_VK_TRACE=<n>: name every step of the first n draws, clears and
  * flips (a crash inside the driver then ends the log at the step). */
 static int s_vtrace;
+/* RECOMP_VK_DEPTH_TRACE=<first>-<last>: log depth clears and opaque main-
+ * surface depth state only during this Vulkan frame range. */
+static uint32_t s_depth_trace_first, s_depth_trace_last;
+static int s_depth_trace;
 #define VT(...) do { if (s_vtrace > 0) { fprintf(stderr, "  [VKT] " __VA_ARGS__); fflush(stderr); } } while (0)
 static uint32_t s_frame;
 /* RECOMP_TEX_CHANGES=1: log every cached texture whose guest bytes changed
@@ -85,6 +99,11 @@ static int s_drew_any;
 static int fxaa_on(void);
 static const uint32_t *s_regs;
 static const Nv2aRawBatch *s_batch;
+
+static int depth_trace_frame(void)
+{
+    return s_depth_trace && s_frame >= s_depth_trace_first && s_frame <= s_depth_trace_last;
+}
 
 /* Hitch accounting, as in nv2a_gl. */
 static uint32_t s_hz_progs, s_hz_texs, s_hz_draws;
@@ -682,6 +701,9 @@ static VkDepthBuf *depth_get(uint32_t va, uint32_t pw, uint32_t ph)
         VkClearDepthStencilValue z = { 1.0f, 0 };
         VkImageSubresourceRange rg = { VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT, 0, 1, 0, 1 };
         vkCmdClearDepthStencilImage(s_cb, d->image, VK_IMAGE_LAYOUT_GENERAL, &z, 1, &rg);
+        if (depth_trace_frame())
+            LOGE("[DEPTH] frame %u init zeta %08X %ux%u to depth 1.0 stencil 0\n",
+                 s_frame, va, pw, ph);
     }
     if (s_trace)
         LOGE("depth 0x%08X %ux%u\n", va, pw, ph);
@@ -2225,6 +2247,28 @@ static int ready(void)
         const char *e = getenv("RECOMP_VK_TRACE");
         s_vtrace = e ? atoi(e) : 0;
     }
+    {
+        const char *e = getenv("RECOMP_VK_DEPTH_TRACE");
+        if (e && *e) {
+            char *end;
+            unsigned long first = strtoul(e, &end, 10);
+            unsigned long last = first;
+            if (end != e && *end == '-') {
+                const char *tail = end + 1;
+                last = strtoul(tail, &end, 10);
+                if (end == tail)
+                    last = 0;
+            }
+            if (end != e && !*end && first <= UINT32_MAX
+                    && last >= first && last <= UINT32_MAX) {
+                s_depth_trace_first = (uint32_t)first;
+                s_depth_trace_last = (uint32_t)last;
+                s_depth_trace = 1;
+                LOGE("depth trace frames %u-%u by RECOMP_VK_DEPTH_TRACE\n",
+                     s_depth_trace_first, s_depth_trace_last);
+            }
+        }
+    }
     nv2a_shader_vk = 1;
     glslang_initialize_process();
 
@@ -2574,18 +2618,95 @@ typedef struct {
     uint32_t bcolor;
 } DynState;
 static DynState s_dyn;
+static int s_opaque_depth_logged;
 
-static void apply_dynamic(const uint32_t *r, int has_depth, VkPrimitiveTopology topo)
+/* A diagnostic A/B switch: if the missing scene appears without depth, the
+ * depth path is implicated. It deliberately changes both testing and writes
+ * so draws cannot occlude each other through stale or malformed depth values. */
+static int depth_disabled(void)
+{
+    static int disabled = -1;
+    if (disabled < 0) {
+        const char *e = getenv("RECOMP_VK_NO_DEPTH");
+        disabled = e && *e && strcmp(e, "0") != 0;
+        if (disabled)
+            LOGE("depth test and writes disabled by RECOMP_VK_NO_DEPTH\n");
+    }
+    return disabled;
+}
+
+static int depth_always(void)
+{
+    static int always = -1;
+    if (always < 0) {
+        const char *e = getenv("RECOMP_VK_DEPTH_ALWAYS");
+        always = e && *e && strcmp(e, "0") != 0;
+        if (always)
+            LOGE("depth compare forced to ALWAYS by RECOMP_VK_DEPTH_ALWAYS\n");
+    }
+    return always;
+}
+
+static int depth_always_opaque(void)
+{
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *e = getenv("RECOMP_VK_DEPTH_ALWAYS_OPAQUE");
+        enabled = e && *e && strcmp(e, "0") != 0;
+        if (enabled)
+            LOGE("depth compare forced to ALWAYS for opaque full-size surfaces by RECOMP_VK_DEPTH_ALWAYS_OPAQUE\n");
+    }
+    return enabled;
+}
+
+static int depth_greater_opaque(void)
+{
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *e = getenv("RECOMP_VK_DEPTH_GREATER_OPAQUE");
+        enabled = e && *e && strcmp(e, "0") != 0;
+        if (enabled)
+            LOGE("depth compare forced to GREATER for opaque full-size surfaces by RECOMP_VK_DEPTH_GREATER_OPAQUE\n");
+    }
+    return enabled;
+}
+
+static void apply_dynamic(const Nv2aRawBatch *b, const uint32_t *r, int has_depth,
+                          VkPrimitiveTopology topo)
 {
     DynState d;
+    int no_depth = depth_disabled();
+    int always = depth_always();
+    int opaque_func = depth_always_opaque() ? 0x207
+                    : depth_greater_opaque() ? 0x204 : 0;
+    /* Conker renders its opaque world into the 640x480 or widescreen main
+     * surface, while its shadow and glow targets are much smaller. Preserve
+     * those passes so this probe changes only opaque main-surface depth tests. */
+    if (!always && opaque_func && !r[0x304 / 4]
+            && b->surface.width >= 600 && b->surface.height >= 400) {
+        if (!s_opaque_depth_logged) {
+            LOGE("opaque depth override targets %08X %ux%u (blend disabled)\n",
+                 b->color_va, b->surface.width, b->surface.height);
+            s_opaque_depth_logged = 1;
+        }
+    } else {
+        opaque_func = 0;
+    }
     memset(&d, 0, sizeof d);
     d.cull = r[0x308 / 4] != 0;
     d.cullmode = r[0x39C / 4];
     d.front = r[0x3A0 / 4];
     d.topo = (uint32_t)topo;
-    d.dtest = has_depth && r[0x30C / 4];
-    d.dwrite = has_depth && r[0x35C / 4];
-    d.dop = r[0x354 / 4];
+    d.dtest = !no_depth && has_depth && r[0x30C / 4];
+    d.dwrite = !no_depth && has_depth && r[0x35C / 4];
+    d.dop = always ? 0x207 : opaque_func ? (uint32_t)opaque_func : r[0x354 / 4];
+    if (depth_trace_frame() && !r[0x304 / 4]
+            && b->surface.width >= 600 && b->surface.height >= 400) {
+        LOGE("[DEPTH] frame %u draw surf %08X zeta %08X blend %08X test %u write %u"
+             " compare %03X raw %03X zmm %08X clip %08X/%08X\n",
+             s_frame, b->color_va, b->zeta_va, r[0x304 / 4], d.dtest, d.dwrite,
+             d.dop, r[0x354 / 4], r[0x1D78 / 4], r[0x394 / 4], r[0x398 / 4]);
+    }
     d.stest = has_depth && r[0x32C / 4];
     if (d.stest) {
         d.sfail = r[0x370 / 4]; d.szfail = r[0x374 / 4]; d.spass = r[0x378 / 4];
@@ -3269,7 +3390,7 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
         cur_pipe_gen = s_cb_gen;
         s_pipe_foreign = 0;
     }
-    apply_dynamic(r, d != NULL, topo);
+    apply_dynamic(b, r, d != NULL, topo);
     set_surface_scissor(r, s);
 
     /* Uniforms. */
@@ -3525,6 +3646,10 @@ static void vk_clear(const Nv2aSurface *sf, const Nv2aRenderState *rs,
     if (d && (flags & 0x3)) {
         uint32_t zmax = s_regs ? zmax_of(s_regs) : 0xFFFFFFu;
         uint32_t z = zmax == 0xFFFFu ? (zstencil & 0xFFFF) : (zstencil >> 8);
+        if (depth_trace_frame() && (flags & 1))
+            LOGE("[DEPTH] frame %u clear surf %08X zeta %08X flags %X raw %08X"
+                 " z %u/%u value %.8g\n", s_frame, s->va, rs ? rs->zeta_va : 0,
+                 flags, zstencil, z, zmax, (double)z / (double)zmax);
         ca[nca].aspectMask = ((flags & 1) ? VK_IMAGE_ASPECT_DEPTH_BIT : 0) |
                              ((flags & 2) ? VK_IMAGE_ASPECT_STENCIL_BIT : 0);
         ca[nca].clearValue.depthStencil.depth = (float)((double)z / (double)zmax);

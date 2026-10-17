@@ -40,7 +40,9 @@ typedef ptrdiff_t     GLintptr;
 #define GL_NONE                           0
 #define GL_ZERO                           0
 #define GL_ONE                            1
+#define GL_POINTS                         0x0000
 #define GL_TRIANGLES                      0x0004
+#define GL_TRIANGLE_STRIP                 0x0005
 #define GL_NEVER                          0x0200
 #define GL_ALWAYS                         0x0207
 #define GL_FRONT                          0x0404
@@ -90,6 +92,10 @@ typedef ptrdiff_t     GLintptr;
 #define GL_ARRAY_BUFFER                   0x8892
 #define GL_ELEMENT_ARRAY_BUFFER           0x8893
 #define GL_STREAM_DRAW                    0x88E0
+#define GL_STREAM_READ                    0x88E1
+#define GL_RASTERIZER_DISCARD             0x8C89
+#define GL_TRANSFORM_FEEDBACK_BUFFER      0x8C8E
+#define GL_INTERLEAVED_ATTRIBS            0x8C8C
 #define GL_DEPTH24_STENCIL8               0x88F0
 #define GL_FRAGMENT_SHADER                0x8B30
 #define GL_VERTEX_SHADER                  0x8B31
@@ -167,6 +173,7 @@ typedef ptrdiff_t     GLintptr;
     X(void, glAttachShader, (GLuint, GLuint)) \
     X(void, glBindAttribLocation, (GLuint, GLuint, const GLchar *)) \
     X(void, glLinkProgram, (GLuint)) \
+    X(void, glTransformFeedbackVaryings, (GLuint, GLsizei, const GLchar *const *, GLenum)) \
     X(void, glGetProgramiv, (GLuint, GLenum, GLint *)) \
     X(void, glGetProgramInfoLog, (GLuint, GLsizei, GLsizei *, GLchar *)) \
     X(void, glUseProgram, (GLuint)) \
@@ -181,9 +188,13 @@ typedef ptrdiff_t     GLintptr;
     X(void, glGenBuffers, (GLsizei, GLuint *)) \
     X(void, glBindBuffer, (GLenum, GLuint)) \
     X(void, glBufferData, (GLenum, GLsizeiptr, const void *, GLenum)) \
-X(void, glBufferSubData, (GLenum, GLintptr, GLsizeiptr, const void *)) \
-X(void *, glMapBufferRange, (GLenum, GLintptr, GLsizeiptr, GLbitfield)) \
-X(GLboolean, glUnmapBuffer, (GLenum)) \
+    X(void, glBufferSubData, (GLenum, GLintptr, GLsizeiptr, const void *)) \
+    X(void *, glMapBufferRange, (GLenum, GLintptr, GLsizeiptr, GLbitfield)) \
+    X(GLboolean, glUnmapBuffer, (GLenum)) \
+    X(void, glBindBufferBase, (GLenum, GLuint, GLuint)) \
+    X(void, glGetBufferSubData, (GLenum, GLintptr, GLsizeiptr, void *)) \
+    X(void, glBeginTransformFeedback, (GLenum)) \
+    X(void, glEndTransformFeedback, (void)) \
     X(void, glVertexAttribPointer, (GLuint, GLint, GLenum, GLboolean, GLsizei, const void *)) \
     X(void, glEnableVertexAttribArray, (GLuint)) \
     X(void, glDisableVertexAttribArray, (GLuint)) \
@@ -260,6 +271,7 @@ int nv2a_gl_load(void *(*getproc)(const char *name));
 #define glAttachShader           p_glAttachShader
 #define glBindAttribLocation     p_glBindAttribLocation
 #define glLinkProgram            p_glLinkProgram
+#define glTransformFeedbackVaryings p_glTransformFeedbackVaryings
 #define glGetProgramiv           p_glGetProgramiv
 #define glGetProgramInfoLog      p_glGetProgramInfoLog
 #define glUseProgram             p_glUseProgram
@@ -277,6 +289,10 @@ int nv2a_gl_load(void *(*getproc)(const char *name));
 #define glBufferSubData          p_glBufferSubData
 #define glMapBufferRange         p_glMapBufferRange
 #define glUnmapBuffer            p_glUnmapBuffer
+#define glBindBufferBase         p_glBindBufferBase
+#define glGetBufferSubData       p_glGetBufferSubData
+#define glBeginTransformFeedback p_glBeginTransformFeedback
+#define glEndTransformFeedback   p_glEndTransformFeedback
 #define glVertexAttribPointer    p_glVertexAttribPointer
 #define glEnableVertexAttribArray p_glEnableVertexAttribArray
 #define glDisableVertexAttribArray p_glDisableVertexAttribArray

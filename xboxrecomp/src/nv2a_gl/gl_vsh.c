@@ -295,6 +295,7 @@ static const char s_vk_prelude[] =
     "layout(location = 2) out vec4 vT0; layout(location = 3) out vec4 vT1;\n"
     "layout(location = 4) out vec4 vT2; layout(location = 5) out vec4 vT3;\n"
     "layout(location = 6) out float vFog;\n"
+    "layout(location = 7) out vec4 vTraceOPos;\n"
     "vec4 R0, R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11;\n"
     "vec4 oPos, o1, o2, oD0, oD1, oFog, oPts, oB0, oB1, oT0, oT1, oT2, oT3;\n"
     "float nv2a_rcp(float x) { return x != 0.0 ? 1.0 / x : 1.884467e+19; }\n"
@@ -383,6 +384,7 @@ const char *nv2a_gl_vsh_prelude(void)
         "uniform vec4 u_vpoff;     /* fixed-function viewport offset */\n"
         "out vec4 vD0; out vec4 vD1; out vec4 vT0; out vec4 vT1;\n"
         "out vec4 vT2; out vec4 vT3; out float vFog;\n"
+        "out vec4 vTraceOPos;\n"
         "vec4 R0, R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11;\n"
         "vec4 oPos, o1, o2, oD0, oD1, oFog, oPts, oB0, oB1, oT0, oT1, oT2, oT3;\n"
         "float nv2a_rcp(float x) { return x != 0.0 ? 1.0 / x : 1.884467e+19; }\n"
@@ -426,6 +428,7 @@ const char *nv2a_gl_vsh_prelude(void)
     "    float w = abs(oPos.w) < 1e-6 ? 1e-6 : oPos.w;\n" \
     "    vec3 s = vec3(oPos.xy * u_aa, oPos.z);\n" \
     "    gl_Position = nv2a_clip(s * w, w);\n" \
+    "    vTraceOPos = oPos;\n" \
     "    vD0 = clamp(oD0, 0.0, 1.0); vD1 = clamp(oD1, 0.0, 1.0);\n" \
     "    vT0 = oT0; vT1 = oT1; vT2 = oT2; vT3 = oT3; vFog = oFog.x;\n" \
     "}\n"

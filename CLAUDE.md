@@ -15,3 +15,8 @@ log `docs/09-bringup-log.md`) and the separate guide repo `../nx-port-guide` (Co
   fits; create a new file only if nothing fits. In the guide, game-specific content goes under the game's
   folder, and anything independent of the game (debug switches, techniques, platform behaviour) also goes
   into the matching shared or platform doc.
+- Keep `docs/14-port-status.md` current as work progresses, using its existing format. Mirror/update the
+  guide's status document only when a major milestone is reached; use the guide's existing Conker status or
+  logbook file if it has no separate status file.
+- When this file changes, copy its full contents to an existing Codex/Cortex equivalent instruction file,
+  if one exists. Do not create a second instructions file solely for this copy.
