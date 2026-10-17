@@ -99,6 +99,10 @@ post-process passes unchanged before concluding that depth is or is not the caus
   (`[VK] texture ... not decodable (drawn magenta)`).
 - **Dark hard-edged quads under projected shadows**: the sampler's border colour (now taken from
   `SET_TEXTURE_BORDER_COLOR`); the frame trace prints stage 0's format, address modes and border.
+- **Blur or masks in the wrong places in a post-process pass**: check every format the frame trace shows
+  sampling a depth buffer or render target, not just the first. Conker reads its depth as 0x41 (glow) and
+  0x3F (cutscene depth of field); the depth texture must decode as each format would decode the guest
+  bytes (`depth_texture_view`, 2026-10-17). `RECOMP_PSH_DUMP=1` shows which channels the combiners use.
 - **A freeze of a few seconds where a loading screen belongs**: look for a `[hitch]` frame of thousands of
   draws. If the draws continue while no flip comes, the title is drawing into the buffer being scanned
   out (`RECOMP_SURF_STATS=1` shows it). Conker's loader does that; the executor presents the scanned-out

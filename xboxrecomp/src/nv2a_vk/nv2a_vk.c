@@ -306,6 +306,7 @@ typedef struct {
      * depth converted to the bytes the guest would read at its address. */
     VkImageView zview;
     VkImage cimage; VkImageView cview; VkDeviceMemory cmem;
+    VkImageView cviews[4];      /* cimage seen through each guest format's channel order */
     uint32_t gen, cgen;         /* bumped by depth writes and clears / at conversion */
 } VkDepthBuf;
 static void depth_free(VkDepthBuf *d);
@@ -680,8 +681,13 @@ static void depth_free(VkDepthBuf *d)
     garbage_add(d->image, d->view, d->mem);
     if (d->zview)
         garbage_add(VK_NULL_HANDLE, d->zview, VK_NULL_HANDLE);
-    if (d->cimage)
+    if (d->cimage) {
+        int i;
+        for (i = 0; i < 4; i++)
+            if (d->cviews[i])
+                garbage_add(VK_NULL_HANDLE, d->cviews[i], VK_NULL_HANDLE);
         garbage_add(d->cimage, d->cview, d->cmem);
+    }
 }
 
 static VkDepthBuf *depth_get(uint32_t va, uint32_t pw, uint32_t ph)
@@ -1371,7 +1377,7 @@ volatile int nv2a_vk_cube_maps = 1;
 /* Stage i: its image view (a surface or a cached texture), sampler and
  * texcoord scale. Records uploads, so call it outside rendering or accept
  * that it ends the pass. */
-static VkImageView depth_as_texture(VkDepthBuf *d);   /* after the post-process pass */
+static VkImageView depth_as_texture(VkDepthBuf *d, uint32_t color);   /* after the post-process pass */
 static VkDepthBuf *depth_find(uint32_t va);
 
 static void bind_stage(const uint32_t *regs, int i, float scale[2], VkDescriptorImageInfo *out,
@@ -1450,7 +1456,7 @@ static void bind_stage(const uint32_t *regs, int i, float scale[2], VkDescriptor
         out->imageView = rt->view;
         *sampled = rt;
         rt_scale(w, h, rt->w, rt->h, rt->aa_sx, rt->aa_sy, scale);
-    } else if (depth_find(va) && (out->imageView = depth_as_texture(depth_find(va))) != VK_NULL_HANDLE) {
+    } else if (depth_find(va) && (out->imageView = depth_as_texture(depth_find(va), color)) != VK_NULL_HANDLE) {
         /* converted depth (depth_as_texture); the normalised coordinates
          * already span the buffer */
     } else {
@@ -4098,14 +4104,18 @@ static VkPipeline pp_pipe(VkFormat fmt)
     return pipe;
 }
 
-/* A texture at a depth buffer's address (Conker's depth of field reads its
- * Z24S8 buffer as LIN_R8G8B8A8 to decide what to blur). The depth lives in a
- * Vulkan depth image and never reaches guest memory, so the texture upload
- * read stale bytes and the blur mask was arbitrary. Instead a full-screen
- * pass converts the depth to the texels the guest's decode of those bytes
- * gives: with the dword (z24 << 8) | stencil, R G B = z24's high, middle and
- * low bytes. Stencil is not converted (alpha 0). Redone only when the depth
- * changed (gen). */
+/* A texture at a depth buffer's address. Conker reads its Z24S8 buffer as a
+ * colour texture twice a frame: the glow pass as LIN_R8G8B8A8, the cutscene
+ * depth of field as LIN_A8B8G8R8. The depth lives in a Vulkan depth image and
+ * never reaches guest memory, so the texture upload read stale bytes and the
+ * blur mask was arbitrary. Instead a full-screen pass writes the dword
+ * (z24 << 8) | stencil as its four bytes in memory order (r = byte 0, the
+ * stencil, not converted: 0; g b a = z24's low, middle and high bytes), and
+ * each guest format samples it through a view whose component swizzle is
+ * that format's decode of those bytes (nv2a_pb_exec.c's texel decoder).
+ * Converting straight to R8G8B8A8's texels gave the depth of field's
+ * A8B8G8R8 read a zero alpha and the wrong bytes in colour: blur in the
+ * wrong places. Redone only when the depth changed (gen). */
 static VkPipeline s_zconv_pipe;
 static VkSampler  s_zconv_sampler;
 static int        s_zconv_failed;
@@ -4117,7 +4127,7 @@ static const char s_zconv_fs[] =
     "void main() {\n"
     "    float d = texelFetch(src, ivec2(gl_FragCoord.xy), 0).r;\n"
     "    uint z = uint(clamp(d, 0.0, 1.0) * 16777215.0 + 0.5);\n"
-    "    o = vec4(float((z >> 16) & 255u), float((z >> 8) & 255u), float(z & 255u), 0.0) / 255.0;\n"
+    "    o = vec4(0.0, float(z & 255u), float((z >> 8) & 255u), float((z >> 16) & 255u)) / 255.0;\n"
     "}\n";
 
 static VkPipeline zconv_pipe(void)
@@ -4198,7 +4208,43 @@ static VkPipeline zconv_pipe(void)
     return s_zconv_pipe;
 }
 
-static VkImageView depth_as_texture(VkDepthBuf *d)
+/* The view of a converted depth (bytes in memory order, see above) that
+ * reads as the guest format `color` decodes those bytes. */
+static VkImageView depth_texture_view(VkDepthBuf *d, uint32_t color)
+{
+    enum { R = VK_COMPONENT_SWIZZLE_R, G = VK_COMPONENT_SWIZZLE_G,
+           B = VK_COMPONENT_SWIZZLE_B, A = VK_COMPONENT_SWIZZLE_A,
+           ONE = VK_COMPONENT_SWIZZLE_ONE };
+    static const VkComponentMapping map[4] = {
+        { A, B, G, R },             /* 0x41 LIN_R8G8B8A8: R = byte 3 ... A = byte 0 */
+        { G, B, A, R },             /* 0x40 LIN_B8G8R8A8: A = byte 0, R G B = bytes 1 2 3 */
+        { B, G, R, A },             /* 0x12 LIN_A8R8G8B8: B G R A = bytes 0 1 2 3 */
+        { B, G, R, ONE },           /* 0x1E LIN_X8R8G8B8 */
+    };
+    VkImageViewCreateInfo vi = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+    int k;
+    switch (color) {
+    case 0x3F: return d->cview;     /* LIN_A8B8G8R8: R G B A = bytes 0 1 2 3 */
+    case 0x40: k = 1; break;
+    case 0x12: k = 2; break;
+    case 0x1E: k = 3; break;
+    default:   k = 0; break;        /* 0x41, and what else reads a depth as colour */
+    }
+    if (d->cviews[k])
+        return d->cviews[k];
+    vi.image = d->cimage;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = VK_FORMAT_B8G8R8A8_UNORM;
+    vi.components = map[k];
+    vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    vi.subresourceRange.levelCount = 1;
+    vi.subresourceRange.layerCount = 1;
+    if (vkCreateImageView(s_dev, &vi, NULL, &d->cviews[k]) != VK_SUCCESS)
+        d->cviews[k] = VK_NULL_HANDLE;
+    return d->cviews[k];
+}
+
+static VkImageView depth_as_texture(VkDepthBuf *d, uint32_t color)
 {
     VkPipeline pipe = zconv_pipe();
     VkRenderingAttachmentInfo ca = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
@@ -4220,7 +4266,7 @@ static VkImageView depth_as_texture(VkDepthBuf *d)
         d->cgen = d->gen - 1;
     }
     if (d->cgen == d->gen)
-        return d->cview;
+        return depth_texture_view(d, color);
     {
         static int told;
         if (!told++)
@@ -4265,7 +4311,7 @@ static VkImageView depth_as_texture(VkDepthBuf *d)
     s_dyn_valid = 0;
     s_cb_gen++;
     d->cgen = d->gen;
-    return d->cview;
+    return depth_texture_view(d, color);
 }
 
 static VkDepthBuf *depth_find(uint32_t va)

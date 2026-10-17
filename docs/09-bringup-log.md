@@ -492,4 +492,26 @@ every vblank, the renderer only presented on flips. Fix: `scanout_present()` in 
 presents the scanned-out buffer after a draw into it when the last flip is at least 100 ms old, at most
 every 33 ms (`RECOMP_SCANOUT_PRESENT=0` turns it off; normal frames never draw into the scanned-out buffer,
 and the 100 ms rule keeps a half-drawn frame from being shown). The Linux bench now shows the "Loading..."
-screen with its progress bar; NRO `0f38c4dc` carries it to the console.
+screen with its progress bar; NRO `084306cc` carries it to the console.
+
+## 2026-10-17: cutscene depth of field reads the depth in its own byte order
+
+The cutscene blur was still there on the console after the depth-as-texture change. Frame traces armed every
+2 s through the training level's wake-up scene (`RECOMP_FRAME_TRACE` re-armed in a loop; cutscene frames have
+~272 draws and two draws that sample the depth, gameplay frames 753 and one) found a second reader of the
+depth buffer: a full-screen pass into the back buffer, blend ONE / ONE_MINUS_SRC_ALPHA, alpha test `> 0`,
+stage 0 = depth `80BC0000` as format **0x3F `LIN_A8B8G8R8`**, stage 1 = the blurred 128×128 `80D4C280`. The
+glow pass reads the same buffer as 0x41 `LIN_R8G8B8A8`, the only order the conversion wrote.
+
+`RECOMP_PSH_DUMP=1` gave its six combiner stages: `R0 = T0 − c0` with `c0 = 0xED000035` (alpha: depth high
+byte − 0xED; blue: middle byte − 0x35), alpha × 4 × 4, plus a scaled `R0` and the blue term (a 16-bit depth
+compare built from 8-bit combiners), then `(2a − 1)²`; the final combiner outputs `a × blurred` with alpha
+`a`. So the focus depth gives `a = 0` (sharp) and both sides blur. In 0x3F the alpha channel is the depth's
+high byte; the conversion had put the stencil (0) there, `R0.a` went to −1 and the square made `a = 1`:
+every pixel took the blurred image whenever a shot used the effect.
+
+Fix: `depth_as_texture()` writes the dword's four bytes in memory order and `depth_texture_view()` hands each
+guest format a view with its decode as a component swizzle (0x41, 0x3F, 0x40, 0x12, 0x1E; the glow pass's
+0x41 texels are unchanged). On the Linux bench the wake-up scene now opens blurred (waking up), then keeps
+Conker sharp with the near flowers and the background soft; before, the near grass was sharp and Conker
+blurred. NRO `084306cc` carries this and the loading-screen present to the console.

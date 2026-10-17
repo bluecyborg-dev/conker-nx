@@ -14,8 +14,8 @@ much smoother and gameplay better and more stable. **Focus: the known issues (cu
 screens), then more headroom** (60 FPS if possible, low input lag) without lowering quality.
 
 **Builds:** Linux bench `build/linux-vk/conker_recomp`. Newest Switch NRO
-`analysis/elf_archive/conker-vulkan_0f38c4dc.{nro,elf}` (the 30 FPS build plus the loading-screen present),
-not yet run on hardware.
+`analysis/elf_archive/conker-vulkan_084306cc.{nro,elf}` (the 30 FPS build plus the loading-screen present
+and the depth-of-field byte order), not yet run on hardware.
 
 **Last hardware run (2026-10-17, NRO `0678347d`, log `run/net_logs/20261017-152423.log`):** played by the
 user. 30.0 FPS in 34 of the run's 10-second windows and 29–30 in most others; menu transitions a lot
@@ -106,18 +106,26 @@ and say how.
     shadow); the Vulkan samplers always used transparent black, and the shadow passes multiply the scene
     by the sample.
   - Fix (commit d300139): the sampler takes the nearest fixed border colour, colour before alpha.
-- [ ] **Some cutscene shots blurry, some sharp** (Switch, user report). **Still there on NRO `688d985e`**:
-  the depth fix below did not solve it.
-  - Culprit: the depth of field reads the Z24S8 depth buffer as a `LIN_R8G8B8A8` texture to decide which
-    pixels to blur; depth lives in a Vulkan image and never reached guest memory, so the mask came from
-    stale bytes. (The hangover shot at the start of the training level is blurred on purpose.)
-  - Fix (commit 00f1cb4): a texture at a depth buffer's address is a colour image converted from the depth
-    on the GPU (R G B = the 24-bit depth's bytes). The title tavern now blurs its near foreground and keeps
-    the bar sharp; not yet compared with the original game.
+- [ ] **Some cutscene shots blurry, some sharp** (Switch, user report). Still there on NRO `688d985e` and
+  `0678347d`. **Fixed on the Linux bench, verify on the console** (NRO `084306cc`).
+  - Culprit, in two parts. (1) The game reads its Z24S8 depth buffer as a colour texture; the depth lived
+    only in a Vulkan image, so the texture came from stale guest bytes (fixed in 00f1cb4 by converting the
+    depth on the GPU). (2) That conversion wrote the texels of one format, `LIN_R8G8B8A8` (0x41), which is
+    how the glow pass reads the depth. The cutscene depth of field reads it as `LIN_A8B8G8R8` (0x3F), where
+    alpha is the depth's high byte and blue its middle byte. Its six combiner stages compare those two
+    bytes with a focus constant (`0xED…35`), scale the difference by 16 and square it as (2a − 1)², so
+    pixels at the focus depth stay sharp and nearer and farther ones take the blurred image. With alpha 0
+    from the wrong byte order the result was full blur on every pixel of every shot that used it (the
+    near grass sharp and Conker blurred in the wake-up scene, for example).
+  - Fix: the conversion writes the dword `(z24 << 8) | stencil` as its bytes in memory order and each
+    guest format samples it through a view with that format's channel swizzle (`depth_texture_view()` in
+    `nv2a_vk.c`: 0x41, 0x3F, 0x40, 0x12, 0x1E). The wake-up scene now opens blurred, then holds Conker in
+    focus with the near flowers and the background soft. Stencil is still not converted (the depth of
+    field does not use it).
 - [ ] **No loading screen between sections; the game looks frozen for a few seconds instead** (Switch,
   user report on NRO `0678347d`: entering the area with the first weapon in the training level; the same
   happens loading the training level from the profile menu on Linux). **Fixed on the Linux bench, verify
-  on the console** (NRO `0f38c4dc`).
+  on the console** (NRO `084306cc`).
   - Culprit: Conker's loader never flips. Each loading step draws a progress-bar sliver into the back
     buffer (`80964000`) and then copies the whole back buffer into the front one (`80A90000`, the buffer
     the CRTC scans out) with a full-screen quad, a fence after each pair: 13,400 draws and one flip in 13.6
