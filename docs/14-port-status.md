@@ -17,7 +17,7 @@ surface drawn, 2 MB extended-VMA granules).
 
 **Last hardware run (2026-10-17, NRO `3f85b158`, log `run/net_logs/20261017-020541.log`):** boots, plays
 the intro, intro skipped with a button press, then a **black screen with the menu music playing**. The front
-end runs at 20 FPS (steady 50 ms frames, 605–669 draws), reached frame 982 with no `[ICALL]`, `[STUB]`,
+end runs at 20 FPS (steady 50 ms frames, 605–669 draws), reached frame 1,553 (the user quit) with no `[ICALL]`, `[STUB]`,
 exception or `0xCE01` in the log. This matches the Linux bench: the scene is clipped (w-buffering, the
 CURRENT issue below), so the console needs no separate fix for the picture.
 

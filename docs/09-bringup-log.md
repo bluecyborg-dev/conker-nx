@@ -141,7 +141,7 @@ so the second commit re-mapped pages already mapped. `extvma_commit()` in `guest
 
 Log `run/net_logs/20261017-020541.log` (the first upload attempt, `-020451.log`, failed to connect: the
 NetLoader was not open yet). Boot and intro as before; after skipping the intro the screen stays **black with
-the menu music playing**. 20 FPS (50 ms frames, 605–669 draws), frame 982 reached, no `[ICALL]`, `[STUB]` or
+the menu music playing**. 20 FPS (50 ms frames, 605–669 draws), frame 1,553 reached (the user quit), no `[ICALL]`, `[STUB]` or
 exception. No `0xCE01` and no shared-memory fallback at all: the 2 MB extended-VMA granules (6ab1239) are
 verified on hardware. The black picture is the w-buffering problem found on the Linux bench (most of the
 scene clipped), not a console-only fault.
