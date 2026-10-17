@@ -1523,8 +1523,11 @@ static int s_nx_mode = NX_UNKNOWN;
 /* Shared-memory objects can back small one-off commits even on hosts where
  * the much larger Xbox RAM mapping does not fit in Horizon's shared-memory
  * budget. Keep this fallback narrow: the 64 MB guest RAM still uses code
- * memory, while small extended-VMA allocations can use a distinct mapping. */
-#define NX_SMALL_SHM_FALLBACK_MAX (128u * 1024u)
+ * memory, while small extended-VMA allocations can use a distinct mapping.
+ * 2 MB: guest_vmem backs the extended-VMA range in 2 MB granules, and a
+ * code-memory view there can be refused with 0xCE01 even at a fresh address
+ * (Conker, 2026-10-16/17); 128 KB covered only the smaller requests. */
+#define NX_SMALL_SHM_FALLBACK_MAX (2u * 1024u * 1024u)
 
 static void nx_probe(void)
 {

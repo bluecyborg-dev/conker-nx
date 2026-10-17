@@ -69,21 +69,51 @@ extern int g_xbox_extvma_reserved;
  * callers already did stays too, harmless and cheap, in case any commit
  * path here ever runs before extvma_ensure_reserved for a range that
  * needs it, e.g. inside plain RAM where no reservation is needed at all). */
+/* The extended-VMA range is backed in 2 MB granules, each committed once and
+ * never given back (free and decommit zero the guest pages instead, so a
+ * recommit still reads as fresh memory).
+ *
+ * Committing exactly the range a title asked for broke on Horizon. Titles
+ * commit, then commit again from the same base with a larger size (Conker
+ * grows a buffer at one address: 12 KB, then 132, 144, 192 KB); the second
+ * request overlaps pages the first already mapped, and the Switch's
+ * VirtualAlloc, which only recognises a range lying inside a single existing
+ * mapping, tried to map the whole range again. Horizon refused (0xCE01), the
+ * allocation failed, and the front end drew from buffers that did not exist:
+ * a black screen. Whole granules never overlap, and a few dozen mappings
+ * replace hundreds of small ones. */
+#define EXTVMA_GRANULE (2u * 1024u * 1024u)
+static uint8_t s_extvma_backed[VMEM_TOP / EXTVMA_GRANULE + 1];
+
 static int extvma_commit(uint32_t start, uint32_t end)
 {
-    void *host_addr;
-    SIZE_T len;
+    uint64_t aliased_top = (uint64_t)g_xbox_total_ram * (1u + XBOX_NUM_MIRRORS);
+    uint32_t g;
 
     if (!g_xbox_extvma_reserved)
         return 0;
 
-    host_addr = (void *)((uintptr_t)g_xbox_mem_offset + start);
-    len = (SIZE_T)(end - start);
-    if (!VirtualAlloc(host_addr, len, MEM_COMMIT, PAGE_READWRITE)) {
-        fprintf(stderr, "guest_vmem: failed to commit extended-VMA host backing "
-                        "at %p (%zu bytes, error %lu)\n",
-                host_addr, (size_t)len, GetLastError());
-        return 0;
+    for (g = start & ~(EXTVMA_GRANULE - 1); g < end; g += EXTVMA_GRANULE) {
+        uint64_t lo = g, hi = (uint64_t)g + EXTVMA_GRANULE;
+        void *host_addr;
+
+        if (s_extvma_backed[g / EXTVMA_GRANULE])
+            continue;
+        /* The reservation covers [aliased_top, VMEM_TOP) only. */
+        if (lo < aliased_top)
+            lo = aliased_top;
+        if (hi > VMEM_TOP)
+            hi = VMEM_TOP;
+        if (lo >= hi)
+            continue;
+        host_addr = (void *)((uintptr_t)g_xbox_mem_offset + (uintptr_t)lo);
+        if (!VirtualAlloc(host_addr, (SIZE_T)(hi - lo), MEM_COMMIT, PAGE_READWRITE)) {
+            fprintf(stderr, "guest_vmem: failed to commit extended-VMA host backing "
+                            "at %p (%llu bytes, error %lu)\n",
+                    host_addr, (unsigned long long)(hi - lo), GetLastError());
+            return 0;
+        }
+        s_extvma_backed[g / EXTVMA_GRANULE] = 1;
     }
     return 1;
 }
