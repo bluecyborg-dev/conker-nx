@@ -525,7 +525,10 @@ longer freeze (the scan-out present ran; no multi-second frame on those loads). 
 so every cutscene is in-engine and the blur is the game's depth of field as we draw it. At the user's
 request it is off by default: `RECOMP_DOF=0` (set in `src/main.c`) makes the executor drop any draw that
 samples the depth buffer it is bound to, which in Conker is only the depth-of-field composite (the glow
-pass reads the depth with no depth buffer bound). `RECOMP_DOF=1` brings it back for further work.
+pass reads the depth with no depth buffer bound). `RECOMP_DOF=1` brings it back for further work. Linux bench
+check: the training level's wake-up scene is sharp from the first shot after waking, speech bubbles
+readable; only the opening "eyes opening" shot stays soft (a separate, apparently deliberate effect).
+Console build: NRO `cfd4c805`.
 
 Frame rate: 25–30 FPS in the training level with 20 FPS stretches (executor ~70 % of a core), 24–25 FPS in
 Windmill (game thread 65–91 %). First visits to ThroneRoom and Windmill stalled 4–6 s compiling 18–20

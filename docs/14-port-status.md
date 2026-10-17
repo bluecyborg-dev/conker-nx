@@ -15,8 +15,9 @@ screens), then more headroom** (60 FPS if possible, low input lag) without lower
 
 **Builds:** Linux bench `build/linux-vk/conker_recomp`. Newest Switch NRO
 `analysis/elf_archive/conker-vulkan_084306cc.{nro,elf}` (commit a71eec6: the 30 FPS build plus the
-loading-screen present and the depth-of-field byte order), run on hardware. The next build adds
-`RECOMP_DOF=0` by default.
+loading-screen present and the depth-of-field byte order), run on hardware. Newest: `analysis/elf_archive/conker-vulkan_cfd4c805.{nro,elf}` (commit a4747ae: the same
+plus `RECOMP_DOF=0` by default), checked on the Linux bench (the wake-up cutscene sharp after its opening
+shot), not yet run on hardware.
 
 **Last hardware run (2026-10-17, NRO `084306cc`, log `run/net_logs/20261017-163543.log`):** played by the
 user through TrainingLevel, TrainingCave, ThroneRoom and Windmill; no crash or unresolved call. Gameplay
