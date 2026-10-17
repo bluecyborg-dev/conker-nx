@@ -1220,7 +1220,7 @@ static void clk_apply(void)
         s_clk_thread_up = 1;
 }
 
-void switch_boot(void)
+void switch_boot(int argc, char **argv)
 {
     s_t0 = armGetSystemTick();
     socketInitializeDefault();
@@ -1233,6 +1233,25 @@ void switch_boot(void)
             pthread_detach(t);
     }
     load_env();
+    /* KEY=VALUE launch arguments (nxlink --args "A=1 B=2") override
+     * conker_env.txt: settings change per run without touching the SD card.
+     * Applied here, before anything below reads them -- in main() they came
+     * too late for the profiler, the clocks and the log switches.
+     * argv[0] is the NRO path. */
+    {
+        int i;
+        for (i = 1; i < argc; i++) {
+            char kv[512];
+            char *eq;
+            snprintf(kv, sizeof(kv), "%s", argv[i]);
+            eq = strchr(kv, '=');
+            if (!eq || eq == kv)
+                continue;
+            *eq = '\0';
+            setenv(kv, eq + 1, 1);
+            printf("[switch] arg %s=%s\n", kv, eq + 1);
+        }
+    }
     s_log_sync = getenv("CONKER_LOG_SYNC") && strcmp(getenv("CONKER_LOG_SYNC"), "1") == 0;
     {
         const char *a = getenv("CONKER_NO_LOG"), *b = getenv("CONKER_LOG");

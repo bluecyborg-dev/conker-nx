@@ -39,6 +39,11 @@ set(XBOXRECOMP_VULKAN ${CONKER_VULKAN} CACHE BOOL "" FORCE)
 # (0x00780000): the guest stacks and the runtime data block would overlap the
 # game's .data. Everything (runtime, lifted code, main.c) must agree on it.
 add_compile_definitions(XBOX_STACK_BASE=0x00900000)
+# The title's SD-card folder for the toolkit's shader/pipeline caches. Without
+# it they went to Burnout 3's folder (sdmc:/switch/b3x/), which does not exist
+# here: nothing was ever cached and every console run compiled each shader and
+# pipeline the first time it was drawn (a 4 s stall at the intro movie).
+add_compile_definitions(XBOXRECOMP_SWITCH_DIR="sdmc:/switch/conker/")
 
 add_subdirectory(${XBOXRECOMP_DIR} ${CMAKE_BINARY_DIR}/xboxrecomp)
 
@@ -48,6 +53,7 @@ set(GAME_SOURCES
     src/main.c
     src/recomp_manual.c
     src/switch_nx.c
+    src/linux_prof.c
     src/switch_saltynx.c
 )
 

@@ -1538,10 +1538,17 @@ static void *compile_thread(void *arg)
 static int s_prewarming;
 static int s_cache_off = -1;
 
+/* The title's folder on the SD card, set by the title's build
+ * (-DXBOXRECOMP_SWITCH_DIR="sdmc:/switch/<title>/"). The default is the folder
+ * of the port this toolkit came from; a title that does not set it gets no
+ * cache unless that folder happens to exist. */
+#ifndef XBOXRECOMP_SWITCH_DIR
+#define XBOXRECOMP_SWITCH_DIR "sdmc:/switch/b3x/"
+#endif
 static const char *cache_dir(void)
 {
 #if defined(__SWITCH__)
-    return "sdmc:/switch/b3x/";
+    return XBOXRECOMP_SWITCH_DIR;
 #else
     return "";
 #endif

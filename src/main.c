@@ -28,7 +28,7 @@
 
 #ifdef __SWITCH__
 /* libnx lives in switch_nx.c: <switch.h> and the Win32 vocabulary collide. */
-void switch_boot(void);
+void switch_boot(int argc, char **argv);
 void switch_shutdown(void);
 void switch_error_dialog(const char *msg, const char *details);
 #elif !defined(_WIN32)
@@ -268,24 +268,7 @@ int main(int argc, char **argv)
     pthread_t th;
     int rc = 1;
 
-    switch_boot();
-    /* KEY=VALUE launch arguments (nxlink --args "A=1 B=2") override
-     * conker_env.txt, which switch_boot has just read: settings change per
-     * run without touching the SD card. argv[0] is the NRO path. */
-    {
-        int i;
-        for (i = 1; i < argc; i++) {
-            char kv[512];
-            char *eq;
-            snprintf(kv, sizeof(kv), "%s", argv[i]);
-            eq = strchr(kv, '=');
-            if (!eq || eq == kv)
-                continue;
-            *eq = '\0';
-            setenv(kv, eq + 1, 1);
-            printf("[switch] arg %s=%s\n", kv, eq + 1);
-        }
-    }
+    switch_boot(argc, argv);   /* also applies KEY=VALUE launch arguments */
     pthread_attr_init(&attr);
     pthread_attr_setstacksize(&attr, 16u * 1024 * 1024);
     if (pthread_create(&th, &attr, game_thread, &rc) == 0)
@@ -317,6 +300,10 @@ static int game_main(void)
 
     printf("=== Conker: Live & Reloaded (Xbox) - static recompilation ===\n");
     install_crash_reporter();
+    {
+        void linux_prof_start(void);    /* RECOMP_LINUX_PROFILE=1 (src/linux_prof.c) */
+        linux_prof_start();
+    }
     if (getenv("CONKER_EXIT_TRACE"))
         atexit(print_guest_state);
 

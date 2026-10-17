@@ -40,6 +40,8 @@ def main():
     ap.add_argument("--top", type=int, default=25)
     ap.add_argument("--from", dest="first", type=int, default=0)
     ap.add_argument("--to", dest="last", type=int, default=1 << 30)
+    ap.add_argument("--window-s", type=float, default=10.0,
+                    help="window length: 10 on the console, 1 for RECOMP_LINUX_PROFILE")
     a = ap.parse_args()
 
     addrs, names = symbols(a.elf)
@@ -79,7 +81,7 @@ def main():
     for slot in sorted(totals, key=lambda s: -totals[s]):
         n = totals[slot]
         print("slot %d (%s): %d samples in %d windows (%.0f%% of a core), top granules cover %.0f%%"
-              % (slot, slots.get(slot, "?"), n, windows[slot], n / (windows[slot] * 100.0),
+              % (slot, slots.get(slot, "?"), n, windows[slot], n / (windows[slot] * a.window_s * 10.0),
                  100.0 * shown[slot] / n))
         for fn, c in per_slot[slot].most_common(a.top):
             print("  %5.1f%%  %s" % (100.0 * c / n, fn))

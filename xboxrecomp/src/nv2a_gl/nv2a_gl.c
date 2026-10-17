@@ -906,7 +906,10 @@ static const char *prog_cache_path(void)
     if (e && *e)
         return e;
 #if defined(__SWITCH__)
-    return "sdmc:/switch/b3x/progcache.bin";
+#ifndef XBOXRECOMP_SWITCH_DIR               /* see nv2a_vk.c cache_dir() */
+#define XBOXRECOMP_SWITCH_DIR "sdmc:/switch/b3x/"
+#endif
+    return XBOXRECOMP_SWITCH_DIR "progcache.bin";
 #else
     return "progcache.bin";
 #endif
