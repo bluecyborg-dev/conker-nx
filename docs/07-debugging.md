@@ -23,6 +23,7 @@
 | `RECOMP_GL_DUMP=<prefix>[,N]`, `RECOMP_VK_DUMP_SURF`, `RECOMP_FB_DUMP_FLIPS` | frame / surface dumps |
 | `RECOMP_PAD_SCRIPT=<ms>:<btn>[:<hold>],...` / `RECOMP_PAD_LIVE=<file>` | drive menus without hands; with dumps on, "look at the latest frame, append a press" |
 | `RECOMP_WATCHDOG_SECS=<s>` (+ `RECOMP_WATCHDOG_KEEP=1`) | guest call stack on a hang (`tools/stackwalk.py`) |
+| `RECOMP_FILE_TRACE=1` / `=2` | every `NtCreateFile` with path, access, disposition, options and result; `=2` adds the code addresses on the guest stack (callers) |
 | `RECOMP_PB_EXEC=0` | no GPU: boot runs ~50× faster under the software path; follow it by file accesses |
 | `RECOMP_APU_TRACE`, `RECOMP_APU_VOICES`, `RECOMP_AUDIO_DUMP`, `RECOMP_APU_VOICE_DUMP` | audio (never judge audio from a traced run: the trace itself injects gaps) |
 | `RECOMP_NATIVE=0` / `RECOMP_NATIVE_CHECK=1` | disable / verify native replacements |
