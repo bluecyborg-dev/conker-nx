@@ -410,3 +410,23 @@ console's `[profile]` format for `tools/prof_log_report.py --window-s 1`. A gdb-
 taken); the in-process `SIGPROF` sampler replaces it.
 
 NRO with all of this: `analysis/elf_archive/conker-vulkan_ba31654d.{nro,elf}` (commit d300139).
+
+## 2026-10-17: depth of field reads the real depth; fcmov and fxtract lifted
+
+**Depth of field.** The post-process downsample (into the 256×256 target `80CEC180`) samples the back
+buffer on stage 0 and the depth buffer `80BC0000` on stage 1, with stage 1's format `0x41`
+(`LIN_R8G8B8A8`, a colour format) and an alpha test `≥ 8` deciding which pixels enter the blur. The game reads
+its Z24S8 depth as raw bytes. Our depth is a Vulkan depth image that never reaches guest memory, so the
+texture came from stale bytes and the blur mask was arbitrary: the likely cause of "some cutscene parts
+blurry, some sharp". Fix (00f1cb4): depth images are samplable with a depth-only view; a texture whose address
+is a depth buffer is a colour image refilled by a full-screen pass when the depth changed (a counter bumped by
+depth writes and clears), holding the texels the guest's decode of the dword `(z24 << 8) | stencil` gives
+(R G B = the depth's high, middle and low bytes; stencil not converted). The title tavern now blurs the
+near foreground and keeps the bar sharp. Not compared with the original yet; to check on the console.
+
+**x87.** `fcmovCC` (conditions from `g_fp_cmp`, as the jcc mapping) and `fxtract` are lifted (5fa8fb2); both
+were comments in CRT math code (`sub_00458494`, `sub_00459020`).
+
+**Incident.** A long bench run at `DUMPN=15` filled the disk with 9 GB of frame dumps; Docker Desktop hung
+(every `docker` command blocked) and had to be force-restarted after freeing space. `live_linux.sh` now keeps
+only the newest `KEEP_DUMPS` (300) dumps while running.

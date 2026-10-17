@@ -105,10 +105,13 @@ and say how.
     shadow); the Vulkan samplers always used transparent black, and the shadow passes multiply the scene
     by the sample.
   - Fix (commit d300139): the sampler takes the nearest fixed border colour, colour before alpha.
-- [ ] **Some cutscene shots blurry, some sharp** (Switch, user report).
-  - Culprit: probably the game's own depth of field and the deliberately blurred hangover shot at the
-    start of the training level (Conker wakes up hungover). Not checked against the original yet.
-  - Fix: compare a few cutscene frames with footage of the Xbox game before touching anything.
+- [ ] **Some cutscene shots blurry, some sharp** (Switch, user report). Fixed in code, verify on the console.
+  - Culprit: the depth of field reads the Z24S8 depth buffer as a `LIN_R8G8B8A8` texture to decide which
+    pixels to blur; depth lives in a Vulkan image and never reached guest memory, so the mask came from
+    stale bytes. (The hangover shot at the start of the training level is blurred on purpose.)
+  - Fix (commit 00f1cb4): a texture at a depth buffer's address is a colour image converted from the depth
+    on the GPU (R G B = the 24-bit depth's bytes). The title tavern now blurs its near foreground and keeps
+    the bar sharp; not yet compared with the original game.
 - [ ] **Minor stutters in the menu and the intro movie** (Switch, user report; low priority).
   - Culprit: shader/pipeline compiles on first use (no cache until now) and `[hitch]` frames of 50–120 ms
     in the movie.
@@ -118,11 +121,13 @@ and say how.
   (`tools/hidden_entries`); the campaign then ran from the opening to the training level clean. Beach Dead
   not retried yet. Tick once a few more levels load without `[ICALL]`.
 - [ ] **Other x87 instructions the lifter leaves as comments** (`/* FPU: ... */` in `gen/`).
-  - Culprit: no translation for `fcmovnbe` (2 sites, `sub_00458494`), `ficom`/`ficomp` (`sub_0018DEC2`, looks
-    like data decoded as code), `fxtract` (`sub_00459020`), `fnsave`/`frstor` (`sub_004716D8`); `fbld` and
-    `fisttp` sit in data decoded as code. `fnclex` and `ffree` are harmless as no-ops.
-  - Fix: implement `fcmov*` and `fxtract` (CRT-area code, so likely reachable from math functions); check
-    whether `sub_0018DEC2` is real code before doing `ficom`.
+  - Done (commit 5fa8fb2): the `fcmov` family and `fxtract` (CRT math, `sub_00458494`, `sub_00459020`).
+  - Left: `ficom`/`ficomp` (`sub_0018DEC2`, looks like data decoded as code), `fnsave`/`frstor`
+    (`sub_004716D8`), `fbld`/`fisttp` (data decoded as code), `fnclex` (harmless).
+  - Fix: check whether `sub_0018DEC2` and `sub_004716D8` are reached before implementing them.
+- [ ] **A black band across the top of some frames** (Linux, title camera pan and the profile keyboard).
+  - Culprit: unknown; possibly part of a transition. Seen twice, not investigated.
+  - Fix: frame-trace a frame that shows it.
 - [x] **Switch: extended-VMA commits refused (`0xCE01`)** when a title re-commits a growing range from the
   same base.
   - Culprit: the Switch `VirtualAlloc` only recognises a range inside one existing mapping, so the larger
