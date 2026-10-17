@@ -190,6 +190,9 @@ typedef struct {
 /* draw_raw takes attributes in their stored format (Nv2aRawBatch.attr_direct).
  * RECOMP_GL_DIRECT=0 turns it off at run time. */
 #define NV2A_BACKEND_RAW_DIRECT 0x1u
+/* With RAW_DIRECT: the back end also takes CMP (packed 11:11:10) normals as
+ * stored and unpacks them itself (nv2a_vk: in the vertex shader). */
+#define NV2A_BACKEND_RAW_CMP    0x2u
 
 /* Optional, set by the game project: sees every raw batch just before the
  * back end gets it and may change it. attrs is rb->attrs, writable; an

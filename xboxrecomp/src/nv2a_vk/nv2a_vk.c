@@ -2280,6 +2280,9 @@ static int create_swapchain(void)
     return 1;
 }
 
+static VkFormat vertex_format(uint32_t type, uint32_t size);
+static VkFormat vertex_format_fixed(uint32_t type, uint32_t size, uint32_t *fix);
+
 static int ready(void)
 {
     VkApplicationInfo ai = { VK_STRUCTURE_TYPE_APPLICATION_INFO };
@@ -2613,6 +2616,27 @@ static int ready(void)
         return 0;
     clear_image_color(s_dummy_cube_img, 0, 0, 0, 0);
     s_state = 1;
+    {
+        /* Which NV2A vertex formats this device cannot fetch as stored: those
+         * cost CPU per vertex unless vertex_format_fixed finds a substitute. */
+        static const char *tn[8] = { "D3DCOLOR", "S1", "F", "?3", "UB", "S32K", "CMP", "?7" };
+        char line[256];
+        int len = snprintf(line, sizeof line, "vertex formats not fetchable as stored:");
+        uint32_t t, z, n0 = 0;
+        for (t = 0; t < 6; t++)
+            for (z = 1; z <= 4; z++) {
+                if (t == 3 || (t == 0 && z != 4))
+                    continue;
+                if (vertex_format(t, z) == VK_FORMAT_UNDEFINED && len < (int)sizeof line - 16) {
+                    uint32_t fix;
+                    VkFormat sub = vertex_format_fixed(t, z, &fix);
+                    len += snprintf(line + len, sizeof line - len, " %sx%u%s", tn[t], z,
+                                    sub == VK_FORMAT_UNDEFINED ? "(cpu)" : "(fixed)");
+                    n0++;
+                }
+            }
+        LOGE("%s%s\n", line, n0 ? "" : " none");
+    }
     fprintf(stderr, "  [VK] ready%s: BC %s, depth %s, depth clamp %s, UBO align %u,"
             " mips %s (bias %g), aniso %gx, FXAA %s\n",
             s_headless ? " (headless)" : "", s_have_bc ? "yes" : "no",
@@ -2897,6 +2921,7 @@ static uint32_t elem_bytes(uint32_t type, uint32_t size)
 {
     switch (type) {
     case 0: return 4;
+    case 6: return 4;                           /* CMP: one packed dword */
     case 2: return 4 * size;
     case 4: return size;
     default: return 2 * size;
@@ -3011,10 +3036,62 @@ static void attr_to_float4(const Nv2aRawBatch *b, uint32_t a, uint32_t v, float 
     case 4:
         for (c = 0; c < size && c < 4; c++) out[c] = p[c] / 255.0f;
         break;
+    case 6: {                                        /* CMP: 11:11:10 */
+        int32_t w; memcpy(&w, p, 4);
+        out[0] = (float)((int32_t)((uint32_t)w << 21) >> 21) / 1023.0f;
+        out[1] = (float)((int32_t)((uint32_t)w << 10) >> 21) / 1023.0f;
+        out[2] = (float)(w >> 22) / 511.0f;
+        break;
+    }
     default:
         for (c = 0; c < size && c < 4; c++) { int16_t s; memcpy(&s, p + 2 * c, 2); out[c] = (float)s; }
         break;
     }
+}
+
+/* Vertex attributes the shader fixes up (VsBlock attr_cmp/w1/bgra, one bit
+ * per attribute; nv2a_inputs() in the Vulkan prelude). Converting them on
+ * the CPU instead -- every vertex of every draw, then copied again as 16
+ * bytes -- was over a fifth of the executor on the console: CMP normals
+ * through fetch_attr, and formats NVK cannot fetch through attr_to_float4. */
+enum { VFIX_CMP = 1, VFIX_W1 = 2, VFIX_BGRA = 4 };
+static uint32_t s_vfix_mask[3];                 /* of the last upload_vertices */
+
+/* A format the device can fetch for (type, size), with the fix-up the shader
+ * applies; UNDEFINED when there is none (then it is converted here). */
+static VkFormat vertex_format_fixed(uint32_t type, uint32_t size, uint32_t *fix)
+{
+    static const VkFormat four[8] = {
+        0, VK_FORMAT_R16G16B16A16_SNORM, VK_FORMAT_R32G32B32A32_SFLOAT, 0,
+        VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SSCALED, 0, 0 };
+    VkFormat f;
+    *fix = 0;
+    if (type == 6) {
+        /* The raw dword through a 32-bit float lane: fetching R32_SFLOAT
+         * copies the bits, which the shader reads back with floatBitsToUint. */
+        *fix = VFIX_CMP;
+        return VK_FORMAT_R32_SFLOAT;
+    }
+    f = vertex_format(type, size);
+    if (f != VK_FORMAT_UNDEFINED)
+        return f;
+    if (type == 0) {                            /* D3DCOLOR without BGRA fetch */
+        f = vertex_format(4, 4);
+        *fix = VFIX_BGRA;
+        return f;
+    }
+    if (size == 3 && type < 8 && four[type]) {
+        /* Three components the device cannot fetch: fetch four (the fourth
+         * reads the next bytes, which the ring always has) and force w = 1,
+         * as the NV2A supplies for a three-component attribute. */
+        VkFormatProperties fp;
+        vkGetPhysicalDeviceFormatProperties(s_pd, four[type], &fp);
+        if (fp.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT) {
+            *fix = VFIX_W1;
+            return four[type];
+        }
+    }
+    return VK_FORMAT_UNDEFINED;
 }
 
 static int upload_vertices(const Nv2aRawBatch *b)
@@ -3035,14 +3112,19 @@ static int upload_vertices(const Nv2aRawBatch *b)
 
     if (!nv)
         return 0;
+    s_vfix_mask[0] = s_vfix_mask[1] = s_vfix_mask[2] = 0;
     for (a = 0; a < NV2A_RAW_ATTRS; a++) {
+        uint32_t fix;
         fmt[a] = VK_FORMAT_UNDEFINED;
         if (!(b->attr_direct & (1u << a)))
             continue;
-        fmt[a] = vertex_format(b->direct[a].type, b->direct[a].size);
-        if (fmt[a] != VK_FORMAT_UNDEFINED)
+        fmt[a] = vertex_format_fixed(b->direct[a].type, b->direct[a].size, &fix);
+        if (fmt[a] != VK_FORMAT_UNDEFINED) {
             direct |= (uint16_t)(1u << a);
-        else
+            if (fix & VFIX_CMP)  s_vfix_mask[0] |= 1u << a;
+            if (fix & VFIX_W1)   s_vfix_mask[1] |= 1u << a;
+            if (fix & VFIX_BGRA) s_vfix_mask[2] |= 1u << a;
+        } else
             cdirect |= (uint16_t)(1u << a);          /* direct data, converted here */
     }
     conv = b->attr_present & (uint16_t)~direct;
@@ -3138,6 +3220,7 @@ typedef struct {
     float aa[2];
     int32_t xform;
     float snap_y;              /* nv2a_snap's offset for y; surf[3] is x's */
+    uint32_t attr_cmp, attr_w1, attr_bgra;   /* VFIX_* per attribute */
 } VsBlock;
 
 typedef struct {
@@ -3461,6 +3544,7 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
     set_surface_scissor(r, s);
 
     /* Uniforms. */
+    VsBlock *vbp = NULL;                        /* attr fix-ups: after upload_vertices */
     {
         VsBlock *vb;
         FsBlock *fb;
@@ -3477,6 +3561,7 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
         vb->aa[0] = b->aa_sx > 0 ? b->aa_sx : 1.0f;
         vb->aa[1] = b->aa_sy > 0 ? b->aa_sy : 1.0f;
         vb->xform = b->xform == 1 ? 1 : 0;
+        vbp = vb;
         ub[0].buffer = s_f->ring;
         ub[0].offset = vat;
         ub[0].range = sizeof(VsBlock);
@@ -3511,6 +3596,9 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
     }
     if (!upload_vertices(b))
         return;
+    vbp->attr_cmp = s_vfix_mask[0];
+    vbp->attr_w1 = s_vfix_mask[1];
+    vbp->attr_bgra = s_vfix_mask[2];
     {
         VkDeviceSize iat;
         if (b->vertex_count <= 65536) {
@@ -4573,7 +4661,7 @@ static const Nv2aBackend s_backend = {
     vk_draw,
     vk_flip,
     vk_draw_raw,
-    NV2A_BACKEND_RAW_DIRECT,
+    NV2A_BACKEND_RAW_DIRECT | NV2A_BACKEND_RAW_CMP,
 };
 
 void nv2a_vk_install(void)

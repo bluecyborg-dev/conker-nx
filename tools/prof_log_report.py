@@ -40,6 +40,8 @@ def main():
     ap.add_argument("--top", type=int, default=25)
     ap.add_argument("--from", dest="first", type=int, default=0)
     ap.add_argument("--to", dest="last", type=int, default=1 << 30)
+    ap.add_argument("--callers", action="store_true",
+                    help="read the [profile-lr] lines: samples by caller (lr) instead of pc")
     ap.add_argument("--window-s", type=float, default=10.0,
                     help="window length: 10 on the console, 1 for RECOMP_LINUX_PROFILE")
     a = ap.parse_args()
@@ -62,7 +64,7 @@ def main():
             for s, off in re.findall(r" (\d+)=([0-9a-f]+)", line):
                 slots[int(s)] = name_of(int(off, 16)) if int(off, 16) else "?"
             continue
-        m = re.match(r"\[profile\] slot (\d+) n (\d+):(.*)", line)
+        m = re.match(r"\[profile%s\] slot (\d+) n (\d+):(.*)" % ("-lr" if a.callers else ""), line)
         if not m:
             continue
         slot = int(m.group(1))

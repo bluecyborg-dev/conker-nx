@@ -830,13 +830,16 @@ static int prof_key_cmp(const void *a, const void *b)
  * offsets into the NRO). tools/prof_log_report.py resolves them against the
  * ELF and sums them per function. */
 #define PROF_TOP 40
-static void prof_summary(void)
+/* by_lr: the same table by the caller (lr) instead of pc, as
+ * "[profile-lr] ..." -- for leaf functions such as memcpy/memcmp the caller
+ * is what can be changed. */
+static void prof_summary_by(int by_lr)
 {
     static u64 keys[PROF_MAX];
     struct { u32 g, c; } top[PROF_TOP];
     unsigned i = 0, n = s_prof_n, k;
     for (k = 0; k < n; k++)
-        keys[k] = ((u64)s_prof[k].slot << 32) | (s_prof[k].pc & ~127u);
+        keys[k] = ((u64)s_prof[k].slot << 32) | ((by_lr ? s_prof[k].lr : s_prof[k].pc) & ~127u);
     qsort(keys, n, sizeof keys[0], prof_key_cmp);
     while (i < n) {
         unsigned slot = (unsigned)(keys[i] >> 32), j = i, nt = 0, t;
@@ -856,12 +859,18 @@ static void prof_summary(void)
             }
             j = e;
         }
-        len = snprintf(line, sizeof line, "[profile] slot %u n %u:", slot, j - i);
+        len = snprintf(line, sizeof line, "[profile%s] slot %u n %u:", by_lr ? "-lr" : "", slot, j - i);
         for (t = 0; t < nt && len < (int)sizeof line - 16; t++)
             len += snprintf(line + len, sizeof line - len, " %x:%u", top[t].g, top[t].c);
         fprintf(stderr, "%s\n", line);
         i = j;
     }
+}
+
+static void prof_summary(void)
+{
+    prof_summary_by(0);
+    prof_summary_by(1);
 }
 
 static void prof_flush(void)

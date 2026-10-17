@@ -3275,6 +3275,11 @@ static uint16_t raw_direct_attrs(Nv2aRawBatch *rb, uint16_t present,
         case 2: elem = 4 * va->size; break;
         case 4: elem = va->size; break;
         case 1: case 5: elem = 2 * va->size; break;
+        case 6:                                 /* CMP: one dword, 11:11:10 */
+            if (!(s_backend->flags & NV2A_BACKEND_RAW_CMP))
+                continue;
+            elem = 4;
+            break;
         default: continue;
         }
         first = (size_t)va->offset + (size_t)lo * va->stride;

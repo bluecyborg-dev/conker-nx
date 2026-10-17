@@ -263,22 +263,23 @@ int nv2a_gl_vsh_program(const uint32_t (*prog)[4], uint32_t slots,
  * uniforms in a std140 block (binding 0) and Vulkan's 0..1 clip depth. */
 static const char s_vk_prelude[] =
     "#version 450\n"
-    "layout(location = 0) in vec4 v0;\n"
-    "layout(location = 1) in vec4 v1;\n"
-    "layout(location = 2) in vec4 v2;\n"
-    "layout(location = 3) in vec4 v3;\n"
-    "layout(location = 4) in vec4 v4;\n"
-    "layout(location = 5) in vec4 v5;\n"
-    "layout(location = 6) in vec4 v6;\n"
-    "layout(location = 7) in vec4 v7;\n"
-    "layout(location = 8) in vec4 v8;\n"
-    "layout(location = 9) in vec4 v9;\n"
-    "layout(location = 10) in vec4 v10;\n"
-    "layout(location = 11) in vec4 v11;\n"
-    "layout(location = 12) in vec4 v12;\n"
-    "layout(location = 13) in vec4 v13;\n"
-    "layout(location = 14) in vec4 v14;\n"
-    "layout(location = 15) in vec4 v15;\n"
+    "layout(location = 0) in vec4 i_v0;\n"
+    "layout(location = 1) in vec4 i_v1;\n"
+    "layout(location = 2) in vec4 i_v2;\n"
+    "layout(location = 3) in vec4 i_v3;\n"
+    "layout(location = 4) in vec4 i_v4;\n"
+    "layout(location = 5) in vec4 i_v5;\n"
+    "layout(location = 6) in vec4 i_v6;\n"
+    "layout(location = 7) in vec4 i_v7;\n"
+    "layout(location = 8) in vec4 i_v8;\n"
+    "layout(location = 9) in vec4 i_v9;\n"
+    "layout(location = 10) in vec4 i_v10;\n"
+    "layout(location = 11) in vec4 i_v11;\n"
+    "layout(location = 12) in vec4 i_v12;\n"
+    "layout(location = 13) in vec4 i_v13;\n"
+    "layout(location = 14) in vec4 i_v14;\n"
+    "layout(location = 15) in vec4 i_v15;\n"
+    "vec4 v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15;\n"
     "layout(std140, set = 0, binding = 0) uniform VsU {\n"
     "    vec4 u_surf;\n"
     "    vec4 u_m[4];\n"
@@ -286,10 +287,87 @@ static const char s_vk_prelude[] =
     "    vec2 u_aa;\n"
     "    int u_xform;\n"
     "    float u_snap_y;\n"
+    "    uint u_attr_cmp, u_attr_w1, u_attr_bgra;\n"
     "};\n"
     /* Transform constants, 192 per instance: an instanced draw (nv2a_vk.c)
      * repeats one mesh with each instance's own set. NV2A_VK_INSTANCES. */
     "layout(std140, set = 0, binding = 6) uniform VsC { vec4 c[192 * 16]; };\n"
+    /* Vertex inputs with the fix-ups the CPU used to do per vertex (nv2a_vk.c
+     * vertex_format_fixed): a CMP normal arrives as its raw dword in .x, a
+     * three-component attribute fetched as four gets w = 1, a D3DCOLOR
+     * fetched as RGBA is swapped back. One uniform test when nothing applies. */
+    "vec4 nv2a_cmp(float f) {\n"
+    "    uint u = floatBitsToUint(f);\n"
+    "    return vec4(float(int(u << 21) >> 21) / 1023.0, float(int(u << 10) >> 21) / 1023.0,\n"
+    "                float(int(u) >> 22) / 511.0, 1.0);\n"
+    "}\n"
+    "void nv2a_inputs() {\n"
+    "    v0 = i_v0;\n"
+    "    v1 = i_v1;\n"
+    "    v2 = i_v2;\n"
+    "    v3 = i_v3;\n"
+    "    v4 = i_v4;\n"
+    "    v5 = i_v5;\n"
+    "    v6 = i_v6;\n"
+    "    v7 = i_v7;\n"
+    "    v8 = i_v8;\n"
+    "    v9 = i_v9;\n"
+    "    v10 = i_v10;\n"
+    "    v11 = i_v11;\n"
+    "    v12 = i_v12;\n"
+    "    v13 = i_v13;\n"
+    "    v14 = i_v14;\n"
+    "    v15 = i_v15;\n"
+    "    if ((u_attr_cmp | u_attr_w1 | u_attr_bgra) == 0u) return;\n"
+    "    if ((u_attr_cmp & 1u) != 0u) v0 = nv2a_cmp(i_v0.x);\n"
+    "    if ((u_attr_w1 & 1u) != 0u) v0.w = 1.0;\n"
+    "    if ((u_attr_bgra & 1u) != 0u) v0 = v0.bgra;\n"
+    "    if ((u_attr_cmp & 2u) != 0u) v1 = nv2a_cmp(i_v1.x);\n"
+    "    if ((u_attr_w1 & 2u) != 0u) v1.w = 1.0;\n"
+    "    if ((u_attr_bgra & 2u) != 0u) v1 = v1.bgra;\n"
+    "    if ((u_attr_cmp & 4u) != 0u) v2 = nv2a_cmp(i_v2.x);\n"
+    "    if ((u_attr_w1 & 4u) != 0u) v2.w = 1.0;\n"
+    "    if ((u_attr_bgra & 4u) != 0u) v2 = v2.bgra;\n"
+    "    if ((u_attr_cmp & 8u) != 0u) v3 = nv2a_cmp(i_v3.x);\n"
+    "    if ((u_attr_w1 & 8u) != 0u) v3.w = 1.0;\n"
+    "    if ((u_attr_bgra & 8u) != 0u) v3 = v3.bgra;\n"
+    "    if ((u_attr_cmp & 16u) != 0u) v4 = nv2a_cmp(i_v4.x);\n"
+    "    if ((u_attr_w1 & 16u) != 0u) v4.w = 1.0;\n"
+    "    if ((u_attr_bgra & 16u) != 0u) v4 = v4.bgra;\n"
+    "    if ((u_attr_cmp & 32u) != 0u) v5 = nv2a_cmp(i_v5.x);\n"
+    "    if ((u_attr_w1 & 32u) != 0u) v5.w = 1.0;\n"
+    "    if ((u_attr_bgra & 32u) != 0u) v5 = v5.bgra;\n"
+    "    if ((u_attr_cmp & 64u) != 0u) v6 = nv2a_cmp(i_v6.x);\n"
+    "    if ((u_attr_w1 & 64u) != 0u) v6.w = 1.0;\n"
+    "    if ((u_attr_bgra & 64u) != 0u) v6 = v6.bgra;\n"
+    "    if ((u_attr_cmp & 128u) != 0u) v7 = nv2a_cmp(i_v7.x);\n"
+    "    if ((u_attr_w1 & 128u) != 0u) v7.w = 1.0;\n"
+    "    if ((u_attr_bgra & 128u) != 0u) v7 = v7.bgra;\n"
+    "    if ((u_attr_cmp & 256u) != 0u) v8 = nv2a_cmp(i_v8.x);\n"
+    "    if ((u_attr_w1 & 256u) != 0u) v8.w = 1.0;\n"
+    "    if ((u_attr_bgra & 256u) != 0u) v8 = v8.bgra;\n"
+    "    if ((u_attr_cmp & 512u) != 0u) v9 = nv2a_cmp(i_v9.x);\n"
+    "    if ((u_attr_w1 & 512u) != 0u) v9.w = 1.0;\n"
+    "    if ((u_attr_bgra & 512u) != 0u) v9 = v9.bgra;\n"
+    "    if ((u_attr_cmp & 1024u) != 0u) v10 = nv2a_cmp(i_v10.x);\n"
+    "    if ((u_attr_w1 & 1024u) != 0u) v10.w = 1.0;\n"
+    "    if ((u_attr_bgra & 1024u) != 0u) v10 = v10.bgra;\n"
+    "    if ((u_attr_cmp & 2048u) != 0u) v11 = nv2a_cmp(i_v11.x);\n"
+    "    if ((u_attr_w1 & 2048u) != 0u) v11.w = 1.0;\n"
+    "    if ((u_attr_bgra & 2048u) != 0u) v11 = v11.bgra;\n"
+    "    if ((u_attr_cmp & 4096u) != 0u) v12 = nv2a_cmp(i_v12.x);\n"
+    "    if ((u_attr_w1 & 4096u) != 0u) v12.w = 1.0;\n"
+    "    if ((u_attr_bgra & 4096u) != 0u) v12 = v12.bgra;\n"
+    "    if ((u_attr_cmp & 8192u) != 0u) v13 = nv2a_cmp(i_v13.x);\n"
+    "    if ((u_attr_w1 & 8192u) != 0u) v13.w = 1.0;\n"
+    "    if ((u_attr_bgra & 8192u) != 0u) v13 = v13.bgra;\n"
+    "    if ((u_attr_cmp & 16384u) != 0u) v14 = nv2a_cmp(i_v14.x);\n"
+    "    if ((u_attr_w1 & 16384u) != 0u) v14.w = 1.0;\n"
+    "    if ((u_attr_bgra & 16384u) != 0u) v14 = v14.bgra;\n"
+    "    if ((u_attr_cmp & 32768u) != 0u) v15 = nv2a_cmp(i_v15.x);\n"
+    "    if ((u_attr_w1 & 32768u) != 0u) v15.w = 1.0;\n"
+    "    if ((u_attr_bgra & 32768u) != 0u) v15 = v15.bgra;\n"
+    "}\n"
     "int nv2a_ib;\n"
     "layout(location = 0) out vec4 vD0; layout(location = 1) out vec4 vD1;\n"
     "layout(location = 2) out vec4 vT0; layout(location = 3) out vec4 vT1;\n"
@@ -435,7 +513,7 @@ const char *nv2a_gl_vsh_prelude(void)
 const char *nv2a_gl_vsh_main_program(void)
 {
     if (nv2a_shader_vk)
-        return NV2A_VSH_MAIN("    nv2a_ib = gl_InstanceIndex * 192;\n", "");
+        return NV2A_VSH_MAIN("    nv2a_ib = gl_InstanceIndex * 192;\n    nv2a_inputs();\n", "");
     /* GL: oPos for RECOMP_GL_VSH_TRACE's transform feedback. */
     return NV2A_VSH_MAIN("", "    vTraceOPos = oPos;\n");
 }
@@ -461,5 +539,22 @@ const char *nv2a_gl_vsh_fixed(void)
         "    vD0 = clamp(v3, 0.0, 1.0); vD1 = clamp(v4, 0.0, 1.0);\n"
         "    vT0 = v9; vT1 = v10; vT2 = v11; vT3 = v12; vFog = 0.0;\n"
         "}\n";
-    return nv2a_shader_vk ? body + sizeof decl - 1 : body;
+    if (nv2a_shader_vk) {
+        /* Vulkan: the inputs go through nv2a_inputs() first (fix-ups). */
+        static char *vk;
+        if (!vk) {
+            const char *m = body + sizeof decl - 1;          /* "void main() {\n..." */
+            const char *open = strstr(m, "{\n") + 2;
+            static const char call[] = "    nv2a_inputs();\n";
+            size_t n1 = (size_t)(open - m), n2 = strlen(open);
+            vk = (char *)malloc(n1 + sizeof call - 1 + n2 + 1);
+            if (!vk)
+                return m;
+            memcpy(vk, m, n1);
+            memcpy(vk + n1, call, sizeof call - 1);
+            memcpy(vk + n1 + sizeof call - 1, open, n2 + 1);
+        }
+        return vk;
+    }
+    return body;
 }

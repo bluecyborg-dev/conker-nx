@@ -86,8 +86,8 @@ and say how.
     bits. A stream segment at `0x7415D7A0` was read from `0x0015D7A0`, the game's code, played as
     full-scale noise.
   - Fix (commit c130f84): addresses in `[0x08000000, 0x80000000)` are VAs. Linux capture: no noise left.
-- [ ] **Intro movie audio stops after under a second** (Switch and Linux). Fixed in code, verify on the
-  console (needs two runs, see Builds).
+- [ ] **Intro movie audio stops after under a second** (Switch and Linux). **Still silent on NRO
+  `688d985e`** (user report, 2026-10-17) with the shader cache in place; lower priority than performance.
   - Culprit: the movie queues 0.8 s of audio (two ADPCM segments per channel) and only refills from
     packet-completion callbacks. Its first frames stalled 4.3 s on the console compiling shaders and NVK
     pipelines (0.5 s on Linux), the stream starved, and the player never refilled. The shader/pipeline
