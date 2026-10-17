@@ -430,3 +430,18 @@ were comments in CRT math code (`sub_00458494`, `sub_00459020`).
 **Incident.** A long bench run at `DUMPN=15` filled the disk with 9 GB of frame dumps; Docker Desktop hung
 (every `docker` command blocked) and had to be force-restarted after freeing space. `live_linux.sh` now keeps
 only the newest `KEEP_DUMPS` (300) dumps while running.
+
+## 2026-10-17: Beach Dead plays; one more hidden entry; an intermittent class-screen freeze
+
+- **Beach Dead.** With the first two seeds the level loaded, then logged `[ICALL] Failed to resolve VA
+  0x0019D3C0` and crashed. That function starts right after the jump table that ends `sub_0019CE40` (last
+  entry `0x0019CE92` at `0x0019D3BC`), referenced from `.rdata` `0x0058EE78`. The hidden-entry scan had
+  missed it twice: its gap rule wanted the entry within 64 bytes of the previous function's end, and its
+  vetting wanted a `ret`/`jmp`/`int3`/`nop` before it. Both now also accept an entry after a jump-table
+  dword pointing back into the previous function; the rescan found exactly this one. Seeded, full regen
+  (21,321 functions); Beach Dead then ran two minutes of bot play with no `[ICALL]` or crash (a6f9ff2).
+  The bunker interior looks strongly red; not compared with the original yet.
+- **Class-screen freeze (intermittent).** Once, after pressing up to change class, frames stopped: the main
+  thread sat in D3D's GPU wait (`sub_0053C190` from `sub_00218220`) on the event the PGRAPH handler sets,
+  while the GPU executor was idle. Six more class changes with `CONKER_D3D_TRACE=1` did not reproduce it.
+  Recorded in the status as a lost wake-up to chase with the watchdog.

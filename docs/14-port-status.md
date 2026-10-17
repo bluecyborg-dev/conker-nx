@@ -116,10 +116,23 @@ and say how.
   - Culprit: shader/pipeline compiles on first use (no cache until now) and `[hitch]` frames of 50–120 ms
     in the movie.
   - Fix: re-check with the cache in place.
-- [ ] **Level loads and cutscenes stop on unresolved calls** (Linux, 2026-10-17): Beach Dead (`0x00359E00`),
-  the opening cutscene (`0x0014FE60` crashed it, `0x00153340`). All seeded, plus 32 more from a static scan
-  (`tools/hidden_entries`); the campaign then ran from the opening to the training level clean. Beach Dead
-  not retried yet. Tick once a few more levels load without `[ICALL]`.
+- [ ] **Level loads and cutscenes stop on unresolved calls** (Linux, 2026-10-17): Beach Dead (`0x00359E00`,
+  then `0x0019D3C0` in play, followed by a crash), the opening cutscene (`0x0014FE60` crashed it,
+  `0x00153340`). All seeded, plus 32 more from a static scan (`tools/hidden_entries`, which now also sees
+  entries after jump tables). The campaign ran from the opening to the training level clean; Beach Dead ran
+  two minutes of bot play clean (commit a6f9ff2). Tick once more levels load without `[ICALL]`.
+- [ ] **Intermittent freeze when changing class in the Dumbots class screen** (Linux, once in seven tries).
+  - Culprit: the main thread sleeps in D3D's GPU wait (`sub_0053C190`, BlockOnTime, called from
+    `sub_00218220` ← `sub_00208AA0` ← `sub_0028EAD0`) on the event the PGRAPH handler sets
+    (`device+0x1DCC`), while the GPU executor is idle with no work: the wake-up was lost. Happened right
+    after a class change started loading another model. Did not reproduce with `CONKER_D3D_TRACE=1` (six
+    tries), so it is timing-dependent.
+  - Fix: find the race between the "make space" NOP trap, its handling and the event (a set before the
+    wait, or a trap the executor never sees). Catch it with `RECOMP_WATCHDOG_SECS` and the executor's
+    pushbuffer pointers in the dump.
+- [ ] **Beach Dead's bunker interior is strongly red** (Linux observation, not reported by the user).
+  - Culprit: unknown; could be the level's own lighting, or a texture/combiner problem.
+  - Fix: compare with footage of the original first.
 - [ ] **Other x87 instructions the lifter leaves as comments** (`/* FPU: ... */` in `gen/`).
   - Done (commit 5fa8fb2): the `fcmov` family and `fxtract` (CRT math, `sub_00458494`, `sub_00459020`).
   - Left: `ficom`/`ficomp` (`sub_0018DEC2`, looks like data decoded as code), `fnsave`/`frstor`
