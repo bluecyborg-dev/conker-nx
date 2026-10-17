@@ -7,21 +7,23 @@ is reached; the full history of how each one was found stays in [09-bringup-log.
 When a big milestone is reached, copy this file into the guide
 (`nx-port-guide/platforms/xbox/conker/`).
 
-**Last milestone (2026-10-17):** **the single-player campaign plays on the Linux bench.** New game →
-the opening cutscenes (throne room, Berri's house, the bar, the Panther King) → the training level, where
-the stick moves Conker. No unresolved calls or crashes on the way after 35 more seeds (commit 66ef96c). The
-black title scene before it was the lifter's `fincstp` (commit 1bc623e). Conker himself draws as a purple
-blob (see issues). **Next focus: performance on the console** (30 FPS, 60 if possible, low input lag).
+**Last milestone (2026-10-17):** **the game plays on the console**: boot, intro, menus, new game, the
+opening and the training level (NRO `e807fd88`, played by hand). Steady 20 FPS in gameplay; the user found it
+smooth and stable and listed what was wrong (below). Fixed since on the Linux bench: the audio static, the
+intro's lost audio (pending a console run), Conker's magenta tail and the extra shadows. **Focus: the known
+issues first, then performance** (30 FPS, 60 if possible, low input lag).
 
 **Builds:** Linux bench `build/linux-vk/conker_recomp`. Newest Switch NRO
-`analysis/elf_archive/conker-vulkan_e807fd88.{nro,elf}` (commit 66ef96c: `fincstp`, 37 new seeds, in-log
-profiler summary, `[perf]` over nxlink), not yet run on hardware.
+`analysis/elf_archive/conker-vulkan_ba31654d.{nro,elf}` (commit d300139, all of the fixes below), not yet run
+on hardware. Run it twice: the first run fills the new shader/pipeline cache in
+`sdmc:/switch/conker/`, the second shows the intro without the compile stall.
 
-**Last hardware run (2026-10-17, NRO `3f85b158`, log `run/net_logs/20261017-020541.log`):** boots, plays
-the intro, intro skipped with a button press, then a **black screen with the menu music playing**. The front
-end runs at 20 FPS (steady 50 ms frames, 605–669 draws), reached frame 1,553 (the user quit) with no `[ICALL]`, `[STUB]`,
-exception or `0xCE01` in the log. The Switch and Linux both show the unresolved renderer issue; the
-current evidence does not establish that they share the same specific depth/clip cause.
+**Last hardware run (2026-10-17, NRO `e807fd88`, log `run/net_logs/20261017-064742.log`):** the user played
+from boot to the training level. Intro audio lost after under a second; static bursts on menu selections, in
+the first cutscene and more often in gameplay; minor stutters in the menu and the movie; Conker's tail
+purple; some cutscene shots blurry; two shadows following Conker. Gameplay 20.0 FPS (50 ms frames, 526
+draws), no `[ICALL]`, crash or `0xCE01`. Per thread: game 28 % of a core, the GPU executor 71 %; the
+emulated vblank ran at 26–33 Hz instead of 60.
 
 ## Milestones
 
@@ -37,14 +39,15 @@ current evidence does not establish that they share the same specific depth/clip
 | 2026-10-17 | Front end runs on the console with its music and no memory errors (picture still black) | Switch |
 | 2026-10-17 | **Front end renders and is playable**: title tavern, profile created and saved, Dumbots level/team/class select and lobby | Linux |
 | 2026-10-17 | **Single-player campaign plays**: new game, the full opening, control in the training level | Linux |
+| 2026-10-17 | **The game plays on the console**: boot to the training level by hand, steady 20 FPS | Switch |
 
 **Priority (2026-10-17):** get to a visible, playable game scene as soon as possible. The Linux bench may use
 a different resolution or aspect ratio from the Switch; exact aspect-ratio matching can wait. The current
 640×480 back-buffer capture shows geometry projected far outside the view, so aspect ratio alone does not
 explain the black screen.
 
-Next milestones: gameplay on the console; 30 FPS in the training level on the console; then 60 FPS and
-input latency.
+Next milestones: the known issues closed on the console; 30 FPS in the training level on the console; then
+60 FPS and input latency.
 
 ## Known issues
 
@@ -77,14 +80,43 @@ and say how.
   - Fix (done 2026-10-17, commit 1bc623e): `fincstp`/`fdecstp` move `g_fp_top` (`lifter.py`, test in
     `test_lifter_fpu.py`). The title tavern renders. How it was found, step by step: 2026-10-17 entries in
     [09-bringup-log.md](09-bringup-log.md) and [15-black-screen-investigation-summary.md](15-black-screen-investigation-summary.md).
+- [x] **Static ("heavy rain", TV noise) on menu selections, in cutscenes and in gameplay** (Switch and Linux).
+  - Culprit: DirectSound gives the APU `MmGetPhysicalAddress()` of its buffers; for memory above RAM (the
+    extended-VMA range at `0x74000000`) that is the VA passed through, and `apu_phys()` masked it to 26
+    bits. A stream segment at `0x7415D7A0` was read from `0x0015D7A0`, the game's code, played as
+    full-scale noise.
+  - Fix (commit c130f84): addresses in `[0x08000000, 0x80000000)` are VAs. Linux capture: no noise left.
+- [ ] **Intro movie audio stops after under a second** (Switch and Linux). Fixed in code, verify on the
+  console (needs two runs, see Builds).
+  - Culprit: the movie queues 0.8 s of audio (two ADPCM segments per channel) and only refills from
+    packet-completion callbacks. Its first frames stalled 4.3 s on the console compiling shaders and NVK
+    pipelines (0.5 s on Linux), the stream starved, and the player never refilled. The shader/pipeline
+    cache that should prevent the compiles was written to Burnout 3's folder `sdmc:/switch/b3x/`
+    (hard-coded in the toolkit), which does not exist: nothing was ever cached.
+  - Fix (commit 0d9fb5c): the cache folder is `XBOXRECOMP_SWITCH_DIR`, set to `sdmc:/switch/conker/`. If the
+    first frames still stall on a cold cache, prewarm or keep the APU fed during compiles.
+- [x] **Conker's tail draws magenta** (Switch and Linux).
+  - Culprit: the tail fur samples a 64×64 `SZ_A8Y8` and a 64×64 `SZ_G8B8` texture; neither had a decoder,
+    so both were uploaded as the undecodable-texture magenta.
+  - Fix (commit 9882f42): `AY8`, `A8Y8`, `G8B8`, `R8B8` decoders (xemu's channel placement). The tail is
+    orange fur with a white tip.
+- [x] **Two shadows following Conker / dark quads on the ground** (Switch and Linux).
+  - Culprit: the projected shadow maps are sampled clamp-to-border with border `0x00FFFFFF` (white = no
+    shadow); the Vulkan samplers always used transparent black, and the shadow passes multiply the scene
+    by the sample.
+  - Fix (commit d300139): the sampler takes the nearest fixed border colour, colour before alpha.
+- [ ] **Some cutscene shots blurry, some sharp** (Switch, user report).
+  - Culprit: probably the game's own depth of field and the deliberately blurred hangover shot at the
+    start of the training level (Conker wakes up hungover). Not checked against the original yet.
+  - Fix: compare a few cutscene frames with footage of the Xbox game before touching anything.
+- [ ] **Minor stutters in the menu and the intro movie** (Switch, user report; low priority).
+  - Culprit: shader/pipeline compiles on first use (no cache until now) and `[hitch]` frames of 50–120 ms
+    in the movie.
+  - Fix: re-check with the cache in place.
 - [ ] **Level loads and cutscenes stop on unresolved calls** (Linux, 2026-10-17): Beach Dead (`0x00359E00`),
   the opening cutscene (`0x0014FE60` crashed it, `0x00153340`). All seeded, plus 32 more from a static scan
   (`tools/hidden_entries`); the campaign then ran from the opening to the training level clean. Beach Dead
   not retried yet. Tick once a few more levels load without `[ICALL]`.
-- [ ] **Conker draws as a purple blob** (training level, Linux).
-  - Culprit: probably his fur, which uses NV2A texture-shader modes the renderer does not implement (next
-    item), or a texture format it decodes wrongly. The other characters and the level look right.
-  - Fix: frame-trace a gameplay frame and look at Conker's draws (texture-shader program, formats).
 - [ ] **Other x87 instructions the lifter leaves as comments** (`/* FPU: ... */` in `gen/`).
   - Culprit: no translation for `fcmovnbe` (2 sites, `sub_00458494`), `ficom`/`ficomp` (`sub_0018DEC2`, looks
     like data decoded as code), `fxtract` (`sub_00459020`), `fnsave`/`frstor` (`sub_004716D8`); `fbld` and
@@ -98,8 +130,9 @@ and say how.
   - Fix (done, verified on hardware 2026-10-17 with NRO `3f85b158`): 6ab1239 commits 2 MB granules once.
     The run logged no `0xCE01` and did not need the shared-memory fallback even once (the run with NRO
     `31500df5` used it 12 times).
-- [ ] **Switch front end runs at 20 FPS** (steady 50 ms frames, 540–860 draws; again 20 FPS with 605–669
-  draws on NRO `3f85b158`, while most of the scene is missing).
+- [ ] **Switch runs at 20 FPS** (front end 540–860 draws; gameplay in the training level 526 draws, steady
+  50 ms frames, NRO `e807fd88`). The emulated vblank ran at 26–33 Hz instead of 60 in that run: if the
+  game paces itself on vblank, that alone can hold it at 20. Check the vblank thread first.
   - Culprit: unknown until profiled; draw submission cost on NVK or the guest's own CPU time.
   - Fix: `RECOMP_NX_PROFILE=1` on hardware once the picture is right; levers in [06-performance.md](06-performance.md).
 - [ ] **Intro movie decodes slowly on Switch** (50–117 ms frames).

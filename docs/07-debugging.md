@@ -38,7 +38,10 @@
 | `RECOMP_PB_EXEC=0` | no GPU: boot runs ~50× faster under the software path; follow it by file accesses |
 | `RECOMP_APU_TRACE`, `RECOMP_APU_VOICES`, `RECOMP_AUDIO_DUMP`, `RECOMP_APU_VOICE_DUMP` | audio (never judge audio from a traced run: the trace itself injects gaps) |
 | `RECOMP_NATIVE=0` / `RECOMP_NATIVE_CHECK=1` | disable / verify native replacements |
-| `RECOMP_NX_PROFILE=1\|2` | sampling profiler ([06](06-performance.md)) |
+| `RECOMP_NX_PROFILE=1\|2` | sampling profiler ([06](06-performance.md)); also `[profile]` lines in the log every 10 s: `python3 tools/prof_log_report.py LOG ELF` |
+| `RECOMP_LINUX_PROFILE=1` | Linux bench sampler (`src/linux_prof.c`): `[profile]` per 1 s window, library code as `[profile-lib]`; `prof_log_report.py LOG build/linux-vk/conker_recomp --window-s 1` |
+| `RECOMP_AUDIO_DUMP=<path>,<start s>,<secs>` | the exact PCM sent to the device (s16 stereo 48 kHz); find noise with the first-difference/signal energy ratio per 20 ms (white noise ≈ 2) |
+| `RECOMP_APU_VOICES=1` / `RECOMP_APU_TRACE=1` | every voice seen per 5 s with format and addresses / every APU front-end method (stream segments `0x320`, `0x35C`, `0x600+`, voice on/off/pause `0x124`/`0x128`/`0x140`) |
 | `*_LOG_SYNC=1`, `*_NO_LOG=1`, `RECOMP_QUIET` | logging modes |
 | `XBOX_LOG_LEVEL`, `RECOMP_USB_STATS`, `RECOMP_RUMBLE_TRACE`, `B3_D3D_TRACE`-style hook traces | subsystem logs |
 
@@ -81,6 +84,18 @@ post-process passes unchanged before concluding that depth is or is not the caus
 - Slow motion: game time vs wall time (`clockscan.py`: float clocks in guest RAM and their rate).
 - Memory: `peek.py PID ADDR '*PTR+OFF'` reads guest memory of a running Linux build; `/proc/<pid>/mem`
   unbuffered; gdb hardware watchpoints only report value *changes* (stamp a non-zero value first).
+
+## Audio and texture bug classes
+
+- **Static or noise bursts**: a voice reading the wrong memory (RMS ≈ 0.5, first-difference ratio ≈ 2 in its
+  own samples). Check the addresses the APU is given: memory above RAM comes through `MmGetPhysicalAddress`
+  as a VA (fixed in `apu_phys`, 2026-10-17).
+- **Sound that stops**: trace the stream segments; a stream drained during a long frame and paused for lack
+  of data is a stall problem (first-use shader compiles), not an audio one.
+- **Magenta objects**: an undecodable texture format, named once in the log
+  (`[VK] texture ... not decodable (drawn magenta)`).
+- **Dark hard-edged quads under projected shadows**: the sampler's border colour (now taken from
+  `SET_TEXTURE_BORDER_COLOR`); the frame trace prints stage 0's format, address modes and border.
 
 ## Techniques from the external (BO1) docs that apply here too
 

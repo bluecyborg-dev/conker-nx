@@ -386,3 +386,27 @@ Console tooling for the performance work: the sampling profiler now also prints 
 (`[profile]` lines, hottest 128-byte code granules per thread; `tools/prof_log_report.py LOG ELF` sums them
 per function), and the 10 s `[perf]` report now runs under nxlink too (it only ran when logging to a file, so
 no Wi-Fi run had it). NRO `e807fd88`.
+
+## 2026-10-17: first hand-played console run; static, intro audio, tail and shadows fixed
+
+The user played NRO `e807fd88` from boot to the training level (log `run/net_logs/20261017-064742.log`).
+Gameplay was a steady 20.0 FPS (526 draws, game thread 28 % of a core, GPU executor 71 %, emulated vblank
+26–33 Hz instead of 60) and felt smooth; the user asked to fix the visible and audible problems before
+optimising. Each was reproduced and fixed on the Linux bench:
+
+| User report | Cause | Fix |
+|---|---|---|
+| Brief "heavy rain / TV static" on menu selections, in the first cutscene, more often in gameplay | `apu_phys()` masked every APU address to 26 bits. DirectSound gives the APU `MmGetPhysicalAddress()` of its buffers, and for memory the game allocated above RAM (extended VMA, `0x74000000`) that is the VA passed through: a stream segment at `0x7415D7A0` was read from `0x0015D7A0`, the game's code | Addresses in `[0x08000000, 0x80000000)` are VAs (c130f84). Found by capturing the output (`RECOMP_AUDIO_DUMP`), measuring each 20 ms window's first-difference/signal energy ratio (white noise ≈ 2, music < 0.8), then a temporary per-voice detector in the voice processor that logged the noisy voice's format and stream-segment address: voice `v046`, 16-bit stereo stream, RMS 0.5 and ratio 1.8 (uniform random data) on segment `0x7415D7A0`, legitimate rain on segments in RAM |
+| Intro movie audio lost within a second | The movie (four mono ADPCM stream voices) queues two 0.4 s segments per channel and refills only from completion callbacks. Its first frames stalled (frame 3: 4,270 ms on the console, 434 ms on Linux), so both segments drained, DirectSound paused the starved voices and the player never refilled. The stall is first-use shader and pipeline compilation (the Linux sampler shows lavapipe's LLVM busy while the main thread yields); the console run had prewarmed "0 programs, 0 pipelines" because the toolkit's cache folder was Burnout 3's `sdmc:/switch/b3x/`, hard-coded, which does not exist on this card | Cache folder from `XBOXRECOMP_SWITCH_DIR`, set to `sdmc:/switch/conker/` (0d9fb5c). To verify on the console: the first run fills the cache, the second should keep the intro audio |
+| Tail is purple | The tail fur samples a 64×64 `SZ_A8Y8` (`0x1A`) and a 64×64 `SZ_G8B8` (`0x28`) texture; no decoder, so the magenta placeholder | Decoders for `AY8`, `A8Y8`, `G8B8`, `R8B8` with xemu's channel placement (9882f42); undecodable formats are now named once in the log |
+| Two shadows following the character | The projected shadow maps (`PROJECT2D`, 128×128 R5G6B5) are sampled clamp-to-border with `SET_TEXTURE_BORDER_COLOR` `0x00FFFFFF`; Vulkan samplers always had a transparent black border, and the shadow passes multiply the scene (`DST_COLOR × ZERO`), so dark quads appeared wherever receivers reached past the map | Sampler takes the nearest fixed border colour, colour before alpha (d300139). A first attempt that chose by alpha first changed nothing; the frame trace's new stage-0 fields (`addr 00010404 border 00FFFFFF`) showed why |
+| Some cutscene shots blurry | Probably the game's depth of field and the deliberately blurred hangover shot | Not changed; compare with footage of the original first |
+
+Tooling added on the way: nxlink `KEY=VALUE` arguments are now applied inside `switch_boot()` (they came
+after it had read the profiler, clock and log switches, so the profiled run had no profile); a Linux sampling
+profiler (`RECOMP_LINUX_PROFILE=1`, `src/linux_prof.c`, 1 s windows, library code by symbol) printing the
+console's `[profile]` format for `tools/prof_log_report.py --window-s 1`. A gdb-Python sampler with
+`continue &`/`interrupt` does not work in batch mode (the thread is still running when the backtrace is
+taken); the in-process `SIGPROF` sampler replaces it.
+
+NRO with all of this: `analysis/elf_archive/conker-vulkan_ba31654d.{nro,elf}` (commit d300139).
