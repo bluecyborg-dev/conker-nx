@@ -1086,11 +1086,17 @@ static void tex_fill(VkTex *t, uint32_t va, uint32_t layer)
         ok = color == 0x0B ? decode_indexed(va, w, h, px)
                            : nv2a_backend_decode_texture(&nt, px);
         if (!ok) {
+            /* Magenta, and named once per format: a missing decoder shows up
+             * on screen as a magenta object and nowhere else. */
+            static uint64_t named[2];
             uint32_t k;
             for (k = 0; k < w * h; k++)
                 px[k] = 0xFFFF00FFu;
-            if (s_trace)
-                LOGE("texture 0x%08X format 0x%02X not decodable\n", va, color);
+            if (s_trace || !(named[(color >> 6) & 1] & (1ull << (color & 63)))) {
+                named[(color >> 6) & 1] |= 1ull << (color & 63);
+                LOGE("texture 0x%08X format 0x%02X %ux%u not decodable (drawn magenta)\n",
+                     va, color, w, h);
+            }
         }
     }
     tex_copy_from_ring(t, at, 0, layer, 0);

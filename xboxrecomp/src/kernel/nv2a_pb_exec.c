@@ -1324,6 +1324,10 @@ static uint32_t linear_twin(uint32_t fmt)
     case 0x06: return 0x12;                /* A8R8G8B8  -> LIN_A8R8G8B8  */
     case 0x07: return 0x1E;                /* X8R8G8B8  -> LIN_X8R8G8B8  */
     case 0x19: return 0x1F;                /* A8        -> LIN_A8        */
+    case 0x01: return 0x1B;                /* AY8       -> LIN_AY8       */
+    case 0x1A: return 0x20;                /* A8Y8      -> LIN_A8Y8      */
+    case 0x28: return 0x17;                /* G8B8      -> LIN_G8B8      */
+    case 0x29: return 0x16;                /* R8B8      -> LIN_R8B8      */
     default:   return fmt;                 /* already linear, or unhandled */
     }
 }
@@ -1431,6 +1435,32 @@ static int sample_texture(const Texture *t, uint32_t u, uint32_t v, uint32_t *ar
     case 0x1F:                                      /* LIN_A8 */
         *argb = ((uint32_t)p[u] << 24) | 0x00FFFFFFu;
         return 1;
+    case 0x1B: {                                    /* LIN_AY8: the byte everywhere */
+        uint32_t t = p[u];
+        *argb = (t << 24) | (t << 16) | (t << 8) | t;
+        return 1;
+    }
+
+    /* Two 8-bit channels. Channel placement as xemu's texture format table
+     * (low byte = "red", high byte = "green" of a two-channel texel):
+     * A8Y8 is (Y, Y, Y, A), G8B8 (lo, hi, lo, hi), R8B8 (hi, lo, lo, hi).
+     * Conker's fur uses A8Y8 and G8B8 (64x64 swizzled): without them the
+     * tail was the undecodable-texture magenta. */
+    case 0x20: {                                    /* LIN_A8Y8 */
+        uint32_t y = p[2 * u], a = p[2 * u + 1];
+        *argb = (a << 24) | (y << 16) | (y << 8) | y;
+        return 1;
+    }
+    case 0x17: {                                    /* LIN_G8B8 */
+        uint32_t lo = p[2 * u], hi = p[2 * u + 1];
+        *argb = (hi << 24) | (lo << 16) | (hi << 8) | lo;
+        return 1;
+    }
+    case 0x16: {                                    /* LIN_R8B8 */
+        uint32_t lo = p[2 * u], hi = p[2 * u + 1];
+        *argb = (hi << 24) | (hi << 16) | (lo << 8) | lo;
+        return 1;
+    }
 
     /* 4:2:2 packed YUV, two texels per four bytes.
      *
