@@ -3723,6 +3723,37 @@ static NTSTATUS bridge_create_file_impl(
     st = xbox_NtCreateFile(&h, access, &oa, &ios, NULL,
                            file_attrs, share, disposition, options);
 
+    {
+        /* RECOMP_FILE_TRACE=1: every open with its mode and result -- what
+         * a title's cache or save code asks for (create vs open, directory vs
+         * file) is not in the [PATH]/[FILE] lines. */
+        static int trace = -1;
+        if (trace < 0) {
+            const char *e = getenv("RECOMP_FILE_TRACE");
+            trace = e ? atoi(e) : 0;
+        }
+        if (trace) {
+            fprintf(stderr, "  [FILE] NtCreateFile %s access %08X disp %u opts %08X attrs %08X"
+                    " -> %08X (info %u)\n", name.Buffer, (unsigned)access,
+                    (unsigned)disposition, (unsigned)options, (unsigned)file_attrs,
+                    (unsigned)st, (unsigned)ios.Information);
+            if (trace >= 2) {
+                /* =2: the code addresses on the guest stack, innermost first
+                 * (return addresses and stray code pointers alike). */
+                uint32_t i, shown = 0;
+                fprintf(stderr, "        callers:");
+                for (i = 0; i < 160 && shown < 12; i++) {
+                    uint32_t v = BRIDGE_MEM32(g_esp + i * 4);
+                    if (v >= g_xbox_code_lo && v < g_xbox_code_hi) {
+                        fprintf(stderr, " %08X", v);
+                        shown++;
+                    }
+                }
+                fprintf(stderr, "\n");
+            }
+        }
+    }
+
     if (NT_SUCCESS(st)) {
         bridge_write_handle(handle_va, h);
         bridge_write_iostatus(iostatus_va, ios.Status, (uint32_t)ios.Information);
