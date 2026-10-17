@@ -7,22 +7,22 @@ is reached; the full history of how each one was found stays in [09-bringup-log.
 When a big milestone is reached, copy this file into the guide
 (`nx-port-guide/platforms/xbox/conker/`).
 
-**Last milestone (2026-10-17):** **the game plays on the console**: boot, intro, menus, new game, the
-opening and the training level (NRO `e807fd88`, played by hand). Steady 20 FPS in gameplay; the user found it
-smooth and stable and listed what was wrong (below). Fixed since on the Linux bench: the audio static, the
-intro's lost audio (pending a console run), Conker's magenta tail and the extra shadows. **Focus: the known
-issues first, then performance** (30 FPS, 60 if possible, low input lag).
+**Last milestone (2026-10-17):** **steady 30 FPS in gameplay on the console** (NRO `0678347d`, commit
+f67d461): vertex attributes the CPU used to convert per vertex are now fetched as stored and unpacked in the
+vertex shader, which took the GPU executor from about 80 % of a core to 43 %. The user found menu transitions
+much smoother and gameplay better and more stable. **Focus: the known issues (cutscene blur, loading
+screens), then more headroom** (60 FPS if possible, low input lag) without lowering quality.
 
 **Builds:** Linux bench `build/linux-vk/conker_recomp`. Newest Switch NRO
-`analysis/elf_archive/conker-vulkan_688d985e.{nro,elf}` (commit a6f9ff2: all of the fixes below, the
-depth-of-field and `fcmov`/`fxtract` changes, and the Beach Dead seed), not yet run on hardware. Run it twice: the first run fills the new shader/pipeline cache in
-`sdmc:/switch/conker/`, the second shows the intro without the compile stall.
+`analysis/elf_archive/conker-vulkan_0f38c4dc.{nro,elf}` (the 30 FPS build plus the loading-screen present),
+not yet run on hardware.
 
-**Last hardware run (2026-10-17, NRO `688d985e`, log `run/net_logs/20261017-145325.log`):** played by the
-user. Sound fixed (no static); the cutscene blur is still there; main-menu transitions a bit slow; the frame
-rate drops a little when the camera moves; still some very minor stutters. **Released as version 0.8.**
-Next focus: stable 30 FPS (60 if possible) by using the console's hardware better, without lowering asset or
-game quality.
+**Last hardware run (2026-10-17, NRO `0678347d`, log `run/net_logs/20261017-152423.log`):** played by the
+user. 30.0 FPS in 34 of the run's 10-second windows and 29–30 in most others; menu transitions a lot
+smoother; gameplay better and more stable. Still there: very very minor stutters (not a focus), blurry
+cutscene shots, and no loading screen between sections (the game froze for a couple of seconds instead, for
+example entering the area with the first weapon in the training level). The emulated vblank counter read
+only 3–7 Hz in gameplay while the game held 30 FPS (see the performance issue below).
 
 ## Milestones
 
@@ -39,14 +39,15 @@ game quality.
 | 2026-10-17 | **Front end renders and is playable**: title tavern, profile created and saved, Dumbots level/team/class select and lobby | Linux |
 | 2026-10-17 | **Single-player campaign plays**: new game, the full opening, control in the training level | Linux |
 | 2026-10-17 | **The game plays on the console**: boot to the training level by hand, steady 20 FPS | Switch |
+| 2026-10-17 | Version 0.8 tagged (NRO `688d985e`): no audio static, tail and shadows right, caches work | Switch |
+| 2026-10-17 | **Steady 30 FPS in gameplay** (NRO `0678347d`, vertex attributes unpacked on the GPU) | Switch |
 
 **Priority (2026-10-17):** get to a visible, playable game scene as soon as possible. The Linux bench may use
 a different resolution or aspect ratio from the Switch; exact aspect-ratio matching can wait. The current
 640×480 back-buffer capture shows geometry projected far outside the view, so aspect ratio alone does not
 explain the black screen.
 
-Next milestones: the known issues closed on the console; 30 FPS in the training level on the console; then
-60 FPS and input latency.
+Next milestones: the known issues closed on the console; then 60 FPS and input latency.
 
 ## Known issues
 
@@ -113,9 +114,24 @@ and say how.
   - Fix (commit 00f1cb4): a texture at a depth buffer's address is a colour image converted from the depth
     on the GPU (R G B = the 24-bit depth's bytes). The title tavern now blurs its near foreground and keeps
     the bar sharp; not yet compared with the original game.
+- [ ] **No loading screen between sections; the game looks frozen for a few seconds instead** (Switch,
+  user report on NRO `0678347d`: entering the area with the first weapon in the training level; the same
+  happens loading the training level from the profile menu on Linux). **Fixed on the Linux bench, verify
+  on the console** (NRO `0f38c4dc`).
+  - Culprit: Conker's loader never flips. Each loading step draws a progress-bar sliver into the back
+    buffer (`80964000`) and then copies the whole back buffer into the front one (`80A90000`, the buffer
+    the CRTC scans out) with a full-screen quad, a fence after each pair: 13,400 draws and one flip in 13.6
+    s on Linux. The hardware shows it because the CRTC reads the front buffer every vblank; the renderer
+    presented only on flips, so the last gameplay frame stayed up. Found with `RECOMP_SURF_STATS=1` (draws
+    per surface, control methods and draw runs of any frame over 2,000 draws) and
+    `RECOMP_FRAME_TRACE_DRAWS=3000-3011`.
+  - Fix: a draw into the scanned-out buffer (`PCRTC_START`, read by `xbox_Nv2aScanout()`) at least 100 ms
+    after the last flip presents that buffer, at most every 33 ms (`scanout_present()` in
+    `xboxrecomp/src/kernel/nv2a_pb_exec.c`; `RECOMP_SCANOUT_PRESENT=0` turns it off). The Linux bench now
+    shows the "Loading..." screen with its progress bar where it showed the menu frozen.
 - [ ] **Minor stutters in the menu and the intro movie** (Switch, user report; low priority). Still some
-  very minor stutters with the shader cache in place (NRO `688d985e`). Main-menu transitions are a bit slow
-  (lowest priority).
+  very minor stutters with the shader cache in place (NRO `688d985e`); "very very minor" on NRO
+  `0678347d`. Main-menu transitions were a bit slow; a lot smoother on NRO `0678347d`.
   - Culprit: shader/pipeline compiles on first use (no cache until now) and `[hitch]` frames of 50–120 ms
     in the movie.
   - Fix: re-check with the cache in place.
@@ -151,13 +167,23 @@ and say how.
   - Fix (done, verified on hardware 2026-10-17 with NRO `3f85b158`): 6ab1239 commits 2 MB granules once.
     The run logged no `0xCE01` and did not need the shared-memory fallback even once (the run with NRO
     `31500df5` used it 12 times).
-- [ ] **Frame rate drops when the camera moves** (Switch, NRO `688d985e`, user report). Part of the
-  performance work below.
-- [ ] **Switch runs at 20 FPS** (front end 540–860 draws; gameplay in the training level 526 draws, steady
-  50 ms frames, NRO `e807fd88`). The emulated vblank ran at 26–33 Hz instead of 60 in that run: if the
-  game paces itself on vblank, that alone can hold it at 20. Check the vblank thread first.
-  - Culprit: unknown until profiled; draw submission cost on NVK or the guest's own CPU time.
-  - Fix: `RECOMP_NX_PROFILE=1` on hardware once the picture is right; levers in [06-performance.md](06-performance.md).
+- [ ] **Frame rate drops when the camera moves** (Switch, NRO `688d985e`, user report). Not reported on NRO
+  `0678347d`; re-check when looking for 60 FPS.
+- [x] **Switch runs at 20 FPS** (front end 540–860 draws; gameplay in the training level 526 draws, steady
+  50 ms frames, NRO `e807fd88`). **30 FPS since NRO `0678347d`.**
+  - Culprit: the GPU executor, about 80 % of a core, spent a fifth of its time converting vertex
+    attributes on the CPU per vertex and draw: CMP (packed 11:11:10) normals through `fetch_attr` (~13 %)
+    and formats NVK cannot fetch through `attr_to_float4` (~9.5 %), each then copied again as 16 bytes.
+  - Fix (commit f67d461): the Vulkan back end fetches CMP normals as stored (one R32 lane, back-end flag
+    `NV2A_BACKEND_RAW_CMP`) and unpacks them in the vertex shader; unfetchable formats get a fetchable
+    neighbour plus a fix-up (three components fetched as four with w = 1, D3DCOLOR fetched as RGBA and
+    swapped), three per-draw masks applied by `nv2a_inputs()`. Executor 43 % of a core, game thread 59 %.
+- [ ] **60 FPS** (Switch). Headroom after the 30 FPS change: game thread ~59 % of a core, executor ~43 %.
+  - Culprit to check first: the emulated vblank counter read 3–7 Hz in gameplay on NRO `0678347d` (11–50
+    Hz in menus): the timer thread delivers vblanks late or the game paces itself another way. Then the
+    game thread's own hot functions (`tools/prof_log_report.py`).
+  - Fix: find what paces the frame (vblank, flip retire, the game's own timer) before optimising further;
+    levers in [06-performance.md](06-performance.md).
 - [ ] **Intro movie decodes slowly on Switch** (50–117 ms frames).
   - Culprit: CPU-side XMV decode and the YUV→RGB conversion in lifted code.
   - Fix: a native YUV converter as Burnout 3's port has; find Conker's converter first.

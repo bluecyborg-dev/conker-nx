@@ -3311,12 +3311,151 @@ void (*nv2a_raw_batch_hook)(Nv2aRawBatch *rb, float *attrs);
  * look at the presented image, narrow it down. */
 static uint32_t s_frame_draw_no;
 
+/* RECOMP_SURF_STATS=1: for a frame with more than 2000 draws (a loading
+ * screen drawn without flips), which surfaces its draws went to. */
+#define SURF_STATS_N 8
+static struct { uint32_t va, n; } s_surf_stats[SURF_STATS_N];
+static int s_surf_stats_on = -1;
+static uint32_t s_surf_scanout, s_surf_scanout_changes;
+static uint32_t s_surf_last, s_surf_run, s_surf_runs[48], s_surf_nruns;
+uint32_t xbox_Nv2aScanout(void);   /* xbox_memory_layout.c */
+
+static void surf_stats_note(uint32_t va)
+{
+    int i;
+    if (s_surf_stats_on < 0) {
+        const char *e = getenv("RECOMP_SURF_STATS");
+        s_surf_stats_on = e && *e == '1';
+    }
+    if (!s_surf_stats_on)
+        return;
+    if (va != s_surf_last) {
+        if (s_surf_nruns < 48)
+            s_surf_runs[s_surf_nruns++] = (s_surf_last & 0xFFF0000u) | (s_surf_run & 0xFFFF);
+        s_surf_last = va;
+        s_surf_run = 0;
+    }
+    s_surf_run++;
+    if (xbox_Nv2aScanout() != s_surf_scanout) {
+        s_surf_scanout = xbox_Nv2aScanout();
+        s_surf_scanout_changes++;
+    }
+    for (i = 0; i < SURF_STATS_N; i++)
+        if (s_surf_stats[i].va == va || !s_surf_stats[i].n) {
+            s_surf_stats[i].va = va;
+            s_surf_stats[i].n++;
+            return;
+        }
+}
+
+/* Control methods (0x0100-0x01FF, semaphores, other subchannels) seen this
+ * frame: how a long frame without flips is being paced or presented. */
+static struct { uint32_t key, n; } s_surf_meth[24];
+
+static void surf_stats_method(uint32_t subch, uint32_t method)
+{
+    uint32_t key = subch << 16 | method, i;
+    if (s_surf_stats_on <= 0)
+        return;
+    if (subch == 0 && !(method < 0x0200 || (method >= 0x1D6C && method <= 0x1D7C)))
+        return;
+    for (i = 0; i < 24; i++)
+        if (s_surf_meth[i].key == key || !s_surf_meth[i].n) {
+            s_surf_meth[i].key = key;
+            s_surf_meth[i].n++;
+            return;
+        }
+}
+
+static void surf_stats_flip(uint32_t draws)
+{
+    int i;
+    if (s_surf_stats_on > 0 && draws > 2000) {
+        char line[512];
+        int len = snprintf(line, sizeof line,
+                           "[surfstats] flip %u: %u draws, scanout %08X (changed %u times):",
+                           s_gpu.flips, draws, xbox_Nv2aScanout(), s_surf_scanout_changes);
+        for (i = 0; i < SURF_STATS_N && s_surf_stats[i].n; i++)
+            len += snprintf(line + len, sizeof line - len, " %08X:%u",
+                            s_surf_stats[i].va, s_surf_stats[i].n);
+        fprintf(stderr, "%s\n", line);
+        len = snprintf(line, sizeof line, "[surfstats] methods (subch:method:count):");
+        for (i = 0; i < 24 && s_surf_meth[i].n; i++)
+            len += snprintf(line + len, sizeof line - len, " %u:%04X:%u",
+                            s_surf_meth[i].key >> 16, s_surf_meth[i].key & 0xFFFF,
+                            s_surf_meth[i].n);
+        fprintf(stderr, "%s\n", line);
+        len = snprintf(line, sizeof line, "[surfstats] runs (surface>>16:draws):");
+        for (i = 0; i < (int)s_surf_nruns; i++)
+            len += snprintf(line + len, sizeof line - len, " %03X:%u",
+                            s_surf_runs[i] >> 16, s_surf_runs[i] & 0xFFFF);
+        fprintf(stderr, "%s\n", line);
+    }
+    s_surf_nruns = 0;
+    memset(s_surf_stats, 0, sizeof s_surf_stats);
+    memset(s_surf_meth, 0, sizeof s_surf_meth);
+    s_surf_scanout_changes = 0;
+}
+
+/* A draw into the buffer the CRTC is scanning out, with no flip for a while,
+ * is shown by presenting that buffer. Conker's loading screens never flip:
+ * each step draws a progress-bar sliver into the back buffer and copies the
+ * whole back buffer into the front one with a full-screen quad, hundreds of
+ * times a second for several seconds, and the hardware shows it because the
+ * CRTC reads the front buffer every vblank. Presents here come only from
+ * flips, so the last gameplay frame stayed up and the load looked like a
+ * freeze. At most every 33 ms, and only 100 ms after the last flip, so a
+ * normal frame is never presented half drawn. RECOMP_SCANOUT_PRESENT=0 turns
+ * it off. */
+static ULONGLONG s_flip_ms, s_scanout_present_ms;
+
+static void scanout_present(uint32_t color_va)
+{
+    static int on = -1;
+    ULONGLONG now;
+    if (on < 0) {
+        const char *e = getenv("RECOMP_SCANOUT_PRESENT");
+        on = !(e && *e == '0');
+    }
+    if (!on || !s_backend || !s_backend->flip
+        || (color_va & 0x0FFFFFFFu) != (xbox_Nv2aScanout() & 0x0FFFFFFFu))
+        return;
+    now = GetTickCount64();
+    if (now - s_flip_ms < 100 || now - s_scanout_present_ms < 33)
+        return;
+    s_scanout_present_ms = now;
+    {
+        static int told;
+        if (!told++)
+            fprintf(stderr, "  [PB] drawing into the scanned-out buffer %08X with no flip:"
+                    " presenting it (a loading screen)\n", color_va);
+    }
+    s_backend->flip();
+}
+
 static int debug_skip_draw(void)
 {
     static int init;
     static uint32_t skip_lo = 1, skip_hi = 0;
     static int skip_inline;
     uint32_t n = s_frame_draw_no++;
+
+    surf_stats_note(dma_resolve(s_gpu.color_offset));
+    {
+        /* RECOMP_FRAME_TRACE_DRAWS=lo-hi: frame-trace draws lo..hi of every
+         * frame -- reaches into a long frame (a loading screen drawn without
+         * flips) that a flag file armed at a flip cannot time. */
+        static int tinit;
+        static uint32_t t_lo = 1, t_hi = 0;
+        if (!tinit) {
+            const char *e = getenv("RECOMP_FRAME_TRACE_DRAWS");
+            tinit = 1;
+            if (e && sscanf(e, "%u-%u", &t_lo, &t_hi) != 2)
+                t_lo = 1, t_hi = 0;
+        }
+        if (t_lo <= t_hi && (n == t_lo || n == t_hi + 1))
+            s_ftrace_on = n == t_lo;
+    }
 
     if (!init) {
         const char *e = getenv("RECOMP_SKIP_DRAWS");      /* "lo-hi" */
@@ -3453,6 +3592,7 @@ static void raw_batch(void)
     rb.vp_const_gen = s_vp.const_gen ? s_vp.const_gen : 1;
     if (nv2a_raw_batch_hook)
         nv2a_raw_batch_hook(&rb, s_raw_attrs);
+    scanout_present(rb.color_va);
     if (s_ftrace_on) {
         static int vsh_inputs_dumped;
         /* RECOMP_FRAME_TRACE: one line per draw of the traced frame, with
@@ -4342,6 +4482,7 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
 {
     static int inited;
 
+    surf_stats_method(subch, method);
     /* The shadow is the 3D class's register file: methods to the other
      * subchannels (2D surfaces, blits) share its offsets and must not land
      * in it. NV062's SET_OFFSET_SOURCE is 0x0308 = SET_CULL_FACE_ENABLE: a
@@ -4643,6 +4784,8 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
                          ? (s_gpu.flip_write + 1) % s_gpu.flip_modulo
                          : s_gpu.flip_write + 1;
         s_gpu.flips++;
+        s_flip_ms = GetTickCount64();
+        surf_stats_flip(s_frame_draw_no);
         s_frame_draw_no = 0;
         /* Verbose runs: the ranked unhandled-method report every 600 flips,
          * so a run that is killed rather than exits still leaves one. */

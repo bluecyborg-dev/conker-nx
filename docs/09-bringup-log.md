@@ -453,3 +453,43 @@ the cutscene blur is still there (the depth-of-field change did not fix it); mai
 slow; the frame rate drops a little when the camera moves; some very minor stutters remain. The launch
 arguments now reach the profiler (`[prof] sampling ...` in the log). This state was tagged **v0.8** (NRO
 version 0.8). Next: performance, using the hardware better rather than lowering quality.
+
+## 2026-10-17: 30 FPS on the console: vertex attributes unpacked on the GPU
+
+The console profile of the training level on NRO `688d985e` (`RECOMP_NX_PROFILE=1`, read with
+`tools/prof_log_report.py`) had the GPU executor at about 80 % of a core and the game thread well below a
+core, so the executor set the pace. A fifth of the executor's time was spent converting vertex attributes
+on the CPU, per vertex and per draw: CMP (packed 11:11:10) normals through `fetch_attr` (~13 %) and formats
+NVK cannot fetch as stored through `attr_to_float4` (~9.5 %), each result copied again as 16 bytes. A new
+`[profile-lr]` table (samples by caller, `--callers`) charged the `memcpy`/`memcmp` leaves to their callers.
+
+Commit f67d461 moves that work into the vertex shader. CMP normals are fetched as one R32 lane (back-end
+flag `NV2A_BACKEND_RAW_CMP`) and unpacked by `nv2a_cmp()`; formats the device cannot fetch get a fetchable
+neighbour and a fix-up (three components fetched as four with w forced to 1, D3DCOLOR fetched as RGBA and
+swapped back). The three fix-up masks travel in the vertex uniform block and `nv2a_inputs()` in the Vulkan
+prelude applies them. Startup logs which NV2A vertex formats the device cannot fetch as stored.
+
+Console run of NRO `0678347d` (log `run/net_logs/20261017-152423.log`): 30.0 FPS in 34 of the 10-second
+windows, 29–30 in most of the rest; executor about 43 % of a core, game thread about 59 %. The user: menu
+transitions a lot smoother, gameplay better and more stable; left are very very minor stutters, the blurry
+cutscene shots, and missing loading screens between sections. The emulated vblank counter read 3–7 Hz in
+gameplay while the game held 30 FPS, to be understood before trying for 60.
+
+## 2026-10-17: loading screens are drawn into the front buffer, never flipped
+
+The user saw the game freeze for a couple of seconds where a loading screen belongs (entering the area with
+the first weapon in the training level). Linux repro: loading the training level from the profile menu gave
+one presented frame of 13.6 s with 13,400 draws. `RECOMP_SURF_STATS=1` (new: for any frame over 2,000
+draws, draws per surface, scan-out address, control methods and draw runs) showed the draws split evenly
+between the two framebuffers `80964000` and `80A90000`, alternating one at a time, with one flip in the
+whole frame and the scan-out (`PCRTC_START`) parked on `80A90000`. `RECOMP_FRAME_TRACE_DRAWS=3000-3011`
+(new: frame-trace a draw range of every frame, which reaches inside a long frame) showed each pair: a
+progress-bar sliver alpha-blended into the back buffer, then a full-screen 640×480 copy (ONE/ZERO) of the
+back buffer into the front one, then a fence.
+
+So the loader updates the screen by drawing into the buffer the CRTC scans out; the hardware shows it at
+every vblank, the renderer only presented on flips. Fix: `scanout_present()` in `nv2a_pb_exec.c`
+presents the scanned-out buffer after a draw into it when the last flip is at least 100 ms old, at most
+every 33 ms (`RECOMP_SCANOUT_PRESENT=0` turns it off; normal frames never draw into the scanned-out buffer,
+and the 100 ms rule keeps a half-drawn frame from being shown). The Linux bench now shows the "Loading..."
+screen with its progress bar; NRO `0f38c4dc` carries it to the console.

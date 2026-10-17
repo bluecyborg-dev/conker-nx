@@ -948,6 +948,12 @@ uint32_t xbox_GetDisplayFramebuffer(uint32_t *pitch)
     return s_fb_va;
 }
 
+/* PCRTC_START: the buffer the CRTC scans out now (physical, as the guest wrote it). */
+uint32_t xbox_Nv2aScanout(void)
+{
+    return g_nv2a_memory ? *(const volatile uint32_t *)((const char *)g_nv2a_memory + 0x600800) : 0;
+}
+
 static void framebuffer_probe_tick(void)
 {
     static DWORD last_ms;
