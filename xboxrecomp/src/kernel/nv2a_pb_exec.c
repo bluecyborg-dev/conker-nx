@@ -3509,7 +3509,7 @@ static void raw_batch(void)
          * result. Keep the dump scoped to the first substantial traced
          * back-buffer batch so ordinary frame traces remain compact. */
         if (!vsh_inputs_dumped && rb.xform == 2
-                && (rb.color_va == 0x80964000 || rb.color_va == 0x80A90000)
+                && s_gpu.clip_w >= 600 && s_gpu.clip_h >= 400
                 && rb.index_count >= 700) {
             uint32_t pc, a, k;
             vsh_inputs_dumped = 1;

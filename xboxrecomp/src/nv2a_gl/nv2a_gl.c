@@ -2018,12 +2018,10 @@ static void gl_draw_raw(const Nv2aRawBatch *b)
                 && s->w >= 640 && s->h >= 480
                 && (mode == GL_TRIANGLES || mode == GL_TRIANGLE_STRIP)
                 && n >= 700) {
-            uint32_t trace_draw = ++s_vsh_trace_draw;
-            if (!gl_draw_vsh_trace(b, s, trace_draw, (GLsizei)n, idx_type, idx_at))
-                glDrawElements(mode, (GLsizei)n, idx_type, (const void *)(uintptr_t)idx_at);
-        } else {
-            glDrawElements(mode, (GLsizei)n, idx_type, (const void *)(uintptr_t)idx_at);
+            /* A capture pass (rasteriser discarded) before the real draw. */
+            gl_draw_vsh_trace(b, s, ++s_vsh_trace_draw, (GLsizei)n, idx_type, idx_at);
         }
+        glDrawElements(mode, (GLsizei)n, idx_type, (const void *)(uintptr_t)idx_at);
         gl_step_done("draw");
         if (s_watch_hit) {
             /* What the watched draw left: the target's centre and corner. */
