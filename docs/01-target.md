@@ -3,13 +3,14 @@
 ## The disc in this repo
 
 `conker.7z` (3.85 GB) holds `Conker - Live & Reloaded (Europe) (En,Ja,Fr,De,Es,It).iso` (4.76 GB) and a
-`readme.txt`. This is a **Redump full-disc image of the PAL release**:
+`readme.txt`. It is an image of the **PAL release's game partition**:
 
-- The game partition starts at `0x18300000` (after a ~387 MB DVD-video partition). xboxrecomp's
-  `python3 -m tools.xiso unpack` probes that offset, and its source says the offset was confirmed on the
-  Conker Redump image (`tools/xiso/xdvdfs.py`).
-- macOS `tar -tf conker.7z` (bsdtar) lists the archive. Extracting it needs 7-Zip (`brew install sevenzip`)
-  or bsdtar.
+- `tools.xiso ls` finds the XDVDFS volume at offset **0** (a bare game partition, no DVD-video partition in
+  front, despite the Redump-style name). Extracted 2026-10-16 with `tar -xf conker.7z` (macOS bsdtar reads
+  7z) and `python -m tools.xiso unpack <iso> -o game/` (4.4 GB).
+- Contents: `default.xbe` (7.4 MB), `dashupdate.xbe`, `update.xbe`; `dvddata/Audio/` (77 XACT wave banks
+  `.xwb` + one `.xsb` sound bank, 3.6 GB), `dvddata/fmv/` (59 XMV movies, 224 MB), `dvddata/aid/` (Rare's
+  own formats: 473 `.bin`, 161 `.rbm`, 105 `.rba`, 548 MB), `media/` (24 MB, one `.xpr`, a `.ttf`).
 - **It is PAL; all four reference ports are NTSC-U.** See "PAL" below.
 - Never commit the disc, the extracted files, `default.xbe` or generated C.
 
@@ -62,13 +63,20 @@ widescreen, and `AvSendTVEncoderOption(QUERY_AVPACK)` returns `AV_STANDARD_NTSC_
 
 Run on the XBE (toolkit pipeline steps 3-6, see [02-approach.md](02-approach.md)) and write the answers here:
 
-- [ ] Title ID, XBE certificate region and media flags, entry point, section list (D3D, DSOUND, XPP, XNET,
-      ... as separate sections?), `.text` size, kernel import count.
-- [ ] **XDK version** and the D3D flavour (D3D8 or D3D8LTCG). NFSU2/Carbon/Burnout use 5849, NFSU1 uses 5558.
-      D3D/DSOUND/XPP/CRT bodies matched the reference ports byte for byte apart from relocations
-      (Carbon vs NFSU2: 100 % with the same XDK; NFSU1's 5558 D3D/DSOUND/CRT vs 5849 too, though game code
-      differs). So the library hooks can be found by matching the first ~24 normalized instructions
-      against every function start.
+- [x] **Answered 2026-10-16** (`xbe_parser`, full report in `analysis/`, git-ignored):
+      - Title ID **0x4D530051**, retail, built 2005-04-28, region **Rest of World** (PAL), media DVD_X2,
+        debug path `D:\work\Bfd\Game\BuildOutput\FinalRelease.exe` (Rare's "Bfd" = Bad Fur Day).
+      - Base 0x00010000, image 8.51 MB (ends 0x00891D20), **entry 0x0042F0E9**, kernel thunks 0x00561000.
+      - 27 sections: `.text` 4.48 MB (0x00011000), library sections D3DX, XNET, XONLINE, DSOUND, XMV,
+        WMADEC, XGRPH, D3D, PAGELK, XACTENG, EFFECT_U/EFFECT_C/EFFECTS_ (x86 SSE code), XPP; data
+        `.rdata`, `.data` (2.2 MB virtual), XON_RD, DOLBY, `.data1`; non-preloaded `$$XTIMAGE`,
+        `$$XSIMAGE`, bitmaps, `.XTLID`.
+      - **145 kernel imports, all handled** by the toolkit (`tools.kernel_audit.coverage`).
+- [x] **XDK 5849 for every library, D3D8LTCG** (flags 0x400F), DSOUND flags 0x400B (Carbon's later
+      build), plus XACTENLT (XACT audio engine), WMADEC, XVOICE/VOICMAIL, XONLINES. Same XDK as Burnout 3,
+      NFSU2 and Carbon. The D3D code is laid out like Burnout's locally (ISR → vblank handler is 0x2D0
+      in both), and the DSOUND bodies match Burnout's/Carbon's instruction for instruction. Hooks:
+      [09-bringup-log.md](09-bringup-log.md).
 - [ ] Threads created at boot, XMV/other movie format, file formats on the disc.
 - [ ] Self-modifying code / runtime code generation (would break static recompilation).
 - [ ] Presentation interval (30 or 60 fps) and how the main loop steps simulation time (fixed steps per

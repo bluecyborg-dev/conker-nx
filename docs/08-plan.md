@@ -17,7 +17,7 @@
 ## Phases
 
 **0. Setup**
-- Extract the ISO (`tools.xiso unpack`, Redump offset 0x18300000) to `game/` (git-ignored).
+- Extract the ISO (`tools.xiso unpack`; the game partition is at offset 0) to `game/` (git-ignored).
 - `git init` this repo with a `.gitignore` for `*.7z`, `*.iso`, `game/`, `gen/`, `switch_sd/`, `build*/`.
 - Vendor the toolkit from burnout3-sw, set up devkitPro + mesa-switch NVK + Switch glslang, and a Linux
   build host (VM/container) for regen and lavapipe.

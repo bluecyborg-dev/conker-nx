@@ -29,3 +29,12 @@ vkpipecache.bin
 .DS_Store
 .vscode/
 .idea/
+.venv/
+__pycache__/
+iso/
+
+# Game-derived analysis (XBE copy, disassembly, function databases)
+analysis/
+xboxrecomp/tools/*/output/
+deps/
+run/

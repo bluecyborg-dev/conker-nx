@@ -25,6 +25,9 @@ Written 2026-10-16 from two sources:
 | [06-performance.md](06-performance.md) | Measured levers, in the order they paid off, and how to measure |
 | [07-debugging.md](07-debugging.md) | Switches, traces, dumps, pad scripts and the bug classes to grep for |
 | [08-plan.md](08-plan.md) | Risks for Conker and a phased plan |
+| [09-bringup-log.md](09-bringup-log.md) | What was done, in order: analysis results, every hook address and its evidence |
+| [10-building.md](10-building.md) | Building the NRO: native devkitPro (current) or BO1's Docker way, the NVK driver, A/B builds |
+| [11-testing-on-console.md](11-testing-on-console.md) | Wi-Fi test loop with nxlink: SD layout, launch arguments, getting logs back, failure modes |
 
 ## The five things to remember
 

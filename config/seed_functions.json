@@ -1,0 +1,26 @@
+[
+ {
+  "start": "0x00558C9D",
+  "note": "XPP USB host setup (pushes pool tag 'USBH'), right after sub_00558C20's ret 8 with no padding; [ICALL] Failed to resolve on the first Linux run (2026-10-16)."
+ },
+ {
+  "start": "0x0055A788",
+  "note": "XPP: starts right after the previous function's ret with no padding and is only reached through a pointer table; found by scanning XPP.asm for code after an end of function (2026-10-16)."
+ },
+ {
+  "start": "0x0055DF38",
+  "note": "XPP: starts right after the previous function's ret with no padding and is only reached through a pointer table; found by scanning XPP.asm for code after an end of function (2026-10-16). Reads the USB globals at 0x00762CA2."
+ },
+ {
+  "start": "0x0055EB46",
+  "note": "XPP: starts right after the previous function's ret with no padding and is only reached through a pointer table; found by scanning XPP.asm for code after an end of function (2026-10-16)."
+ },
+ {
+  "start": "0x0055EF7B",
+  "note": "XPP: starts right after the previous function's ret with no padding and is only reached through a pointer table; found by scanning XPP.asm for code after an end of function (2026-10-16)."
+ },
+ {
+  "start": "0x0055F59A",
+  "note": "XPP: starts right after the previous function's ret with no padding and is only reached through a pointer table; found by scanning XPP.asm for code after an end of function (2026-10-16). [ICALL] Failed to resolve on the third Linux run."
+ }
+]
