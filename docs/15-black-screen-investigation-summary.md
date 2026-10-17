@@ -4,6 +4,13 @@
 **Scope:** Conker PAL port bring-up through the final Linux Vulkan depth probe  
 **Current outcome:** The port boots, plays the intro, and continues running the front end, but the menu/title scene is still black or mostly absent. The menu is not yet playable. The latest probe did not fix it. The extended-memory error is fixed and verified on Switch. No NRO was uploaded during the final Linux probe.
 
+> **Resolved 2026-10-17.** The black scene was not a renderer fault. The lifter emitted the x87 instruction
+> `fincstp` as a no-op; the game's rotation-matrix builder (`sub_003E2E60`) depends on it, so every camera
+> roll matrix lost a row and the camera view collapsed. The world was projected off screen on every back
+> end. After the lifter fix (conker-nx commit 1bc623e) the title tavern renders and the front end is
+> playable on Linux. The steps that found it are in the 2026-10-17 entry "black front end solved" of
+> [09-bringup-log.md](09-bringup-log.md). The depth, clip and cull probes below were wrong leads; they are kept as a record.
+
 This report consolidates the build, startup, hardware, and graphics attempts recorded through this date. It separates direct hardware evidence from Linux-bench and CPU-estimated results. The full dated logs remain in [09-bringup-log.md](09-bringup-log.md), current issues in [14-port-status.md](14-port-status.md), and the diagnostic commands in [07-debugging.md](07-debugging.md).
 
 ## Current state at a glance

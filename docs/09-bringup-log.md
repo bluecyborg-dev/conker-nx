@@ -263,3 +263,96 @@ the menu music playing**. 20 FPS (50 ms frames, 605–669 draws), frame 1,553 re
 exception. No `0xCE01` and no shared-memory fallback at all: the 2 MB extended-VMA granules (6ab1239) are
 verified on hardware. The black picture matches the unresolved Linux renderer problem; the depth/clip
 cause has not been established, so a console-specific cause remains possible.
+
+## 2026-10-17: corrected OpenGL VSH capture and final Vulkan depth probe
+
+The OpenGL dump at frame 2,100 was fully black. The first triangle-strip transform-feedback diagnostic
+replayed strips as triangle lists, duplicating vertices and rasterizing its probe. The corrected version
+replays the same index sequence as `GL_POINTS` with `GL_RASTERIZER_DISCARD`, capturing one result per index
+without changing the frame. On the 747-index world batch, the CPU estimate had 747 negative-`oPos.w`
+positions and GPU capture had zero positive-w positions. On a 1,082-index world batch, CPU and GPU both had
+80 positive-w positions, none inside 640×480, with bounds `-31283.3,-247017.6:-483.7,-2521.8` (CPU) and
+`-31283.1,-247015.9:-483.7,-2521.8` (GPU). This confirms those sampled OpenGL outputs match the CPU
+interpreter and lie outside the viewport. The 33-slot program has no MAC ARL instruction, so ARL rounding
+does not explain this batch. Guest attributes, constants and camera state remain unverified against a
+reference; OpenGL capture does not verify Vulkan or Switch output.
+
+The final Linux Vulkan probe rebuilt `build/linux-vk` in `conker-dev` and ran the scripted title route with
+`RECOMP_VK_DEPTH_ALWAYS_OPAQUE=1`. The 640×480 frame 2,100 dump remained black; frame 2,101 submitted 700
+draws. The process reached at least frame 2,792 without a recorded renderer crash or guest exception. This
+shows that forcing opaque depth comparisons to pass is not enough to recover this view. No NRO was uploaded.
+
+## 2026-10-17: reference-port review for the missing scene
+
+Reviewed the current engineering notes for [NFS Underground](https://github.com/antoxa2584x/nfsu1-sw),
+[NFS Underground 2](https://github.com/antoxa2584x/nfsu2-sw),
+[NFS Carbon](https://github.com/antoxa2584x/nfsc-sw), and
+[Burnout 3](https://github.com/antoxa2584x/burnout3-sw), then checked the Xbox section of
+[SwitchPorts](https://github.com/robzilla10001/SwitchPorts). SwitchPorts is a discovery and release-status
+list, not a renderer-debugging source; it listed the four requested projects as Xbox-to-Switch ports. The
+list also surfaced [FlatOut 2](https://github.com/antoxa2584x/flatout2-sw), another port from the same
+maintainer/toolkit lineage, so its engineering notes were checked for renderer overlap.
+
+| Reference-port finding | Relevance to Conker | Current-source comparison / result |
+|---|---|---|
+| **NFSU2 black loading screen:** methods from all pushbuffer subchannels were written into the 3D register shadow. An NV062 blit method at `0x0308` aliases NV097 `SET_CULL_FACE_ENABLE`; the loading-screen state then culled every quad. The fix was to update the 3D shadow only for subchannel 0. | Close symptom match and a straightforward state-path check, but not evidence Conker has the same active fault. | The current Conker executor already gates 3D shadow writes on `subch == 0` and returns for other subchannels. The current black-frame notes do not record cull enable/mode/front-face values or their originating subchannels. Capture/inspect those before ruling out a title-specific or runtime state issue. |
+| **NFSU2 Vulkan front-face error:** a backend winding inversion discarded front-facing menu-car, wall and object draws. Pixel readback after each draw in matching GL/Vulkan frames found it. | Can remove surfaces while draws continue, though it does not explain measured world positions tens of thousands of pixels outside the view. | Current `nv2a_vk.c` already has the reference mapping (NV2A on-screen CW to Vulkan CW; GL's window orientation differs). Verify Conker's actual cull state and target pixels for a representative missing draw. |
+| **NFSU2/Carbon clip-z error across the eye plane:** per-vertex clip-z clamp distorted interpolated depth for large triangles near or behind the eye. The Vulkan path was corrected to use depth clamp when available and avoid the invalid behind-eye clamp. | Relevant to Conker batches with negative `oPos.w` or triangles crossing the eye plane; not an explanation by itself for the sampled positive-w vertices far outside x/y bounds. | Current `gl_vsh.c` already has separate Vulkan clip paths based on depth-clamp support. Existing Conker GL capture does not validate matching Vulkan positions, and the final Vulkan report did not record feature availability; keep this as a scoped follow-up. |
+| **Burnout 3 early black scene / missing composite:** incomplete combiners, texture stages, fog, alpha test and immediate attributes caused black-looking or absent outputs; one final composite lost its scene because immediate-mode `SET_VERTEX_DATA2F_M` slot 0 was ignored. | Important after confirming geometry reaches rasterization or a required composite is absent. Current Conker GL captures show an in-view full-screen quad but world vertices outside the view. | Conker's renderer supports register combiners, four texture stages and all 16 immediate attributes. Bump/dot-product texture modes remain missing; census those draws after positions are in view. |
+| **NFSU1 aspect-ratio adaptation:** adjusts projection terms differently for race/front-end views and derives frustum culling from the adjusted projection. | Useful for later ratio tuning, not a current fix: the user accepts an aspect mismatch and that cannot account for extreme off-screen coordinates. | Keep aspect-ratio work deferred until geometry projects near the viewport. |
+
+**Additional SwitchPorts lead: FlatOut 2.** Its notes independently report the R5G6B5 shadow target cleared
+with `0xFFFF` (the same format-sensitive clear class already fixed in Conker) and a Vulkan bloom feedback
+loop where a draw sampled the scene surface it was writing, producing wavy shimmer; the port snapshots the
+target before that draw. The feedback-loop fix is only relevant to Conker if a traced draw reads from its own
+color target. The current glow-chain summary names several separate surfaces but does not establish a
+same-target read/write for a specific draw, so this is a trace check rather than a diagnosis.
+
+The code already contains the strongest NFSU2 subchannel and front-face fixes, so duplicating them is premature.
+The next targeted check is actual cull enable/mode/front-face state, with subchannel IDs retained. Then continue
+the guest attribute, VSH-constant and camera comparison. For eye-plane cases, record whether Vulkan depth
+clamp is active and compare the same draw across GL/Vulkan. Do not revive the disproved `SET_CONTROL0` bit-20
+W-buffer interpretation. No source code was changed during this research review.
+
+## 2026-10-17: black front end solved: `fincstp` was not translated
+
+Starting point: Codex's captures showed world vertices tens of thousands of pixels off screen, identical in
+the desktop GL vertex shader (transform feedback) and the CPU interpreter, so the shader back ends were fed
+bad input. The `SET_CONTROL0` bit-20 w-buffer theory had already been withdrawn (`Z_PERSPECTIVE_ENABLE` is
+bit 16). From there the cause was found in a few hours by following the transform constants back into the
+game's CPU code:
+
+| Step | What was done | Result |
+|---|---|---|
+| 1 | Disassembled the dumped 33-slot vertex program (a small NV2A VSH disassembler over the `[FTRACE VSH PROG]` tokens) | Positions are shorts × `c[109].x`, then model-view `c[96..98]`, projection `c[99..102]`, then the standard XDK screen epilogue (`c[58]`/`c[59]`). The projection was a sane right-handed perspective (near plane 10) |
+| 2 | Logged `c[96..98]` for every programmable draw of one black frame and tested each 3×3 for equal row norms and orthogonal rows | 18 distinct matrices. The ~30 shadow-map draws (light views): orthonormal. All 458 world draws: one camera matrix with every row ≈ (0, 1, 0), cos(row 0, row 2) = 0.99, row 1 of length √2. Bit-identical at frames 4,173, 4,774 and 4,942 and across runs |
+| 3 | Searched guest RAM for those floats with a tolerance, row- and column-major | 7 copies of the camera matrix in D3D layout, the first at `0x0076F8C0` |
+| 4 | gdb hardware watchpoint on `0x0076F8C0` (stamp a different value first: watchpoints report changes only) | Copied there by `sub_000646A0` (`rep movsd`) from the per-viewport camera block `[0x762E44 + 4·viewport] + 64·n` (`0x742A58E0`). That block is written by `sub_0029BCA0`, called from `sub_00046490` |
+| 5 | `sub_0029BCA0` is a look-at taking the eye in `xmm3`/`xmm4`/`xmm6` (register-passed) and target/up on the stack. Captured its inputs at entry with gdb (eye (−49.23, 165, −236.65), target (8, 180, 3), up (0, 1, 0)), emulated its x86 in Python and read the lifted function's output on return | Both correct and identical (x axis (0.973, −0.014, −0.232)…). The look-at was fine; something later overwrote its result (the watchpoint never fired for that write) |
+| 6 | Matrix algebra: S = good⁻¹ · bad | bad = good · S with S degenerate (row 0 zero, row 1 = (0.995, 0.995, 0.995)): a post-multiply by a broken matrix. `sub_00046490`, when `[ebx+0xC0] == 0x40000`, builds a roll matrix with `sub_003E2E60(out, 1, 1, 0, angle, 0, 0, 0)` and multiplies it in with `sub_0042841D` |
+| 7 | Captured `sub_003E2E60`'s inputs and output (another caller, angle 0.349 rad) | Output row 0 = 0; cos/sin of 20° scattered over the other rows |
+| 8 | Read its x87: three `fsincos`, `fmul st(6)`, **`fincstp`** to set `cos·scale` aside, two pops, then `fmul st(6)` / `fmul st(5)` read it back | `gen/` had `/* FPU: fincstp */`: the lifter's fallback comment, i.e. a no-op, so the stack ran one slot off |
+
+Fix (commit 1bc623e): `lifter.py` emits `g_fp_top = (g_fp_top + 1u) & 7u` for `fincstp` (and `+ 7u` for
+`fdecstp`); `ffree` stays a tag-only comment; test in `test_lifter_fpu.py`. `LIFT_ONLY=1` regen: the XBE has
+two `fincstp` sites, `sub_003E2E60` and `sub_00317F40`. **The title tavern renders** (Linux, NRO
+`5c8b2369` built for the console).
+
+Then on the Linux bench, with pad input through `tools/live_linux.sh press` (holds of 400 ms; 150 ms presses
+were missed while the bench ran at ~5 FPS beside a Switch build): Start → Profiles → New Profile → typed
+"a" → Create (saved to `UDATA\4d530051\000000000061\profile.bin`) → profile settings → the Xbox Live & Co
+menu (Xbox Live, System Link, Dumbots, Profiles) → Dumbots → Solo → level select (Beach Dead) → team (Tediz)
+→ class → lobby → Ready. Loading `Level\MPBeach` then stopped: `[ICALL] Failed to resolve VA 0x00359E00`,
+a null function pointer, and the pushbuffer stopped moving. `0x00359E00` follows a jump table and `int3`
+padding and tail-jumps to `0x00359FF0`, which starts right after `sub_00359F80`'s `ret`; both seeded, full
+regen 21,284 of 21,286 functions.
+
+Other x87 instructions still emitted as `/* FPU: ... */`: `fcmovnbe` ×2 (`sub_00458494`), `ficom`/`ficomp`
+(`sub_0018DEC2`, probably data decoded as code), `fxtract` (`sub_00459020`), `fnsave`/`frstor`
+(`sub_004716D8`), `fbld`/`fisttp` (data decoded as code), `fnclex` (harmless). The bring-up checklist's
+"grep `gen/` for bare `/* mnemonic */` comments" missed `fincstp` because the x87 fallback prefixes
+`FPU: `; grep for `/\* (FPU|SSE): ` as well.
+
+Lesson: a black or empty 3D view with every back end agreeing is a CPU-side bug until proven otherwise.
+Checking the model-view matrices for orthogonality would have pointed at the game's math a day earlier
+than the depth/clip probes did.

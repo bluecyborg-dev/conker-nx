@@ -67,7 +67,14 @@ post-process passes unchanged before concluding that depth is or is not the caus
 - **`-DRECOMP_ABI_CHECK`**: `[ABI] sub_X: esi edi esp (epilogue never ran)`. Fast way to find split functions.
 - **`_flags` fallbacks in `gen/`**: jcc conditions the translator could not resolve (each may be "never taken").
 - **Bare `/* mnemonic */` comments in `gen/`**: instructions the lifter did not handle (it is how `lahf`,
-  `pushad`, `bt*`, `cmpltss` were found).
+  `pushad`, `bt*`, `cmpltss` were found). The x87 and SSE fallbacks carry a prefix, so grep those too:
+  `grep -ohE '/\* (FPU|SSE): [a-z0-9]+' gen/*.c | sort | uniq -c`. `fincstp` hid there and blacked out the
+  whole 3D scene (2026-10-17).
+- **Degenerate transform constants**: when geometry is off screen on every back end, log the model-view
+  constants per draw (`[FTRACE VSH CONST]`) and test the 3×3 rows for equal length and orthogonality.
+  A broken camera matrix is CPU-side: find it in guest RAM (tolerance search), watch it with gdb
+  (`watch -l *(int*)(0x1000000000 + va)` after stamping a different value), and compare each writer's
+  lifted output with an emulation of its x86 on the same inputs.
 - **`0xAAAAAAAA`** pointers: the allocator fill, i.e. a race between guest threads or an unlinked node.
 - **NaNs**: a NaN trap (`BO3_TRAP_NAN=<flag file>` in Burnout's main.c unmasks SSE invalid once the file
   exists) named the `lahf` bug.

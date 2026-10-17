@@ -7,13 +7,15 @@ is reached; the full history of how each one was found stays in [09-bringup-log.
 When a big milestone is reached, copy this file into the guide
 (`nx-port-guide/platforms/xbox/conker/`).
 
-**Last milestone (2026-10-17):** the in-engine title-screen flythrough draws on the Linux bench (it was
-black), after widening 16-bit clear colours. Only the ground near the camera shows so far: see the
-**CURRENT** renderer issue below. Its depth/clip cause is still under investigation.
+**Last milestone (2026-10-17):** **the front end renders and plays on the Linux bench.** The black title
+scene was a translator bug, not a renderer one: `fincstp` was emitted as a no-op, which broke the game's
+rotation-matrix builder and collapsed the camera (commit 1bc623e). The title tavern draws; Start, profile
+creation (saved to `UDATA`), the Xbox Live & Co menu, Dumbots → Solo → Beach Dead → team, class and lobby
+all work with pad input. Loading the level then stopped on an unresolved call, now seeded (see below).
 
 **Builds:** Linux bench `build/linux-vk/conker_recomp`. Newest Switch NRO
-`analysis/elf_archive/conker-vulkan_3f85b158.{nro,elf}` (commit d386a80: 16-bit clears, present the last
-surface drawn, 2 MB extended-VMA granules).
+`analysis/elf_archive/conker-vulkan_5c8b2369.{nro,elf}` (commit 1bc623e: the `fincstp` fix; built before the
+two level-load seeds), not yet run on hardware (the upload found the NetLoader closed).
 
 **Last hardware run (2026-10-17, NRO `3f85b158`, log `run/net_logs/20261017-020541.log`):** boots, plays
 the intro, intro skipped with a button press, then a **black screen with the menu music playing**. The front
@@ -33,14 +35,15 @@ current evidence does not establish that they share the same specific depth/clip
 | 2026-10-17 | Profiles menu reached and driven by pad scripts (Start pressed early) | Linux |
 | 2026-10-17 | Title-screen 3D flythrough partly draws (shadow maps cleared white, right surface presented) | Linux |
 | 2026-10-17 | Front end runs on the console with its music and no memory errors (picture still black) | Switch |
+| 2026-10-17 | **Front end renders and is playable**: title tavern, profile created and saved, Dumbots level/team/class select and lobby | Linux |
 
 **Priority (2026-10-17):** get to a visible, playable game scene as soon as possible. The Linux bench may use
 a different resolution or aspect ratio from the Switch; exact aspect-ratio matching can wait. The current
 640×480 back-buffer capture shows geometry projected far outside the view, so aspect ratio alone does not
 explain the black screen.
 
-Next milestones: front end visible and controllable; enter new game; first gameplay frame on Linux (any
-usable aspect ratio); first gameplay frame on the console.
+Next milestones: first gameplay frame on Linux (Dumbots Beach Dead, then the single-player campaign); the
+front end on the console with the `fincstp` fix; first gameplay frame on the console.
 
 ## Known issues
 
@@ -62,80 +65,29 @@ and say how.
     target (dumps came out 341×256 instead of 853×480).
   - Fix (done 2026-10-17): `vk_flip()` presents the last surface *drawn* in the frame (`s_last_drawn` in
     `xboxrecomp/src/nv2a_vk/nv2a_vk.c`) and falls back to the last one touched if nothing was drawn.
-- [ ] **CURRENT: most of the 3D scene is missing** (Linux and Switch). With the default depth state, through
-  the whole title flythrough only the ground next to the camera draws; the sky and distant scenery are
-  missing, and from about frame 4,300 nothing draws at all, so the screen is black. Proof: forcing the
-  back-buffer clear to red gives a red screen with only a vignette and rain on it (see the 2026-10-17 entry
-  in [09-bringup-log.md](09-bringup-log.md) for the traces).
-  - Culprit: **depth rejection is a confirmed contributor; the later blackout is still unresolved**.
-    The frame trace records `SET_CONTROL0` (0x0290) = `0x00100001` and
-    `SET_ZMIN_MAX_CONTROL` (0x1D78) = 1, with clip range 0..16,777,215. A review found the earlier
-    bit-20 interpretation was wrong: the vendored NV2A header defines `Z_PERSPECTIVE_ENABLE` at bit 16
-    (`0x00010000`), which is clear in `0x00100001`; bit 20 is not defined there. The effect of this bit
-    setting on Conker's raster depth remains unconfirmed. A full-draw
-    `[FTRACE POS CPU]` estimate on Linux (frame after flip 4655, black dump) found 181 large back-buffer
-    draws with 82,750 indices. None of their positive-`oPos.w` positions fell inside 640×480; 6 draw bounds
-    intersected the screen, covering 4,722 indices. Of 53,043 positive-`oPos.w` positions, 45,640 were
-    within the captured depth interval. This diagnostic runs the CPU position interpreter, not the Vulkan
-    shader, so compare its output with generated VSH output before attributing the missing scene to either
-    x/y clipping or depth. Scoped Linux probes force depth compare only for opaque draws to full-size
-    surfaces, preserving shadow and post-process behavior. `RECOMP_VK_DEPTH_ALWAYS_OPAQUE=1` revealed
-    scene geometry in frames 3,780, 4,020 and 4,140; frame 4,320 was black. The follow-up
-    `RECOMP_VK_DEPTH_GREATER_OPAQUE=1` showed the room at frame 3,780, then black at 4,020, 4,140,
-    4,320 and 4,530 (the run reached frame 4,545). These probes show that changing the opaque depth
-    comparison can expose geometry in some views, but neither setting fixes the later blackout or
-    establishes the correct depth function. A default-state trace across frames 4,120–4,340 found the same
-    main ZETA (`80BC0000`) cleared to 1.0 each frame and the same LEQUAL compare (`0x203`) with depth
-    test/write enabled, including black baseline frames 4,140 and 4,320. The late blackout is not
-    explained by a change in depth clear or compare state. A follow-up CPU position trace at flip 4,321
-    (black frame dump 4,320) covered 497 back-buffer draws / 139,085 indices: only three index positions
-    were estimated inside 640×480, all from three full-screen composite quads; no world-geometry positions
-    were inside. Of 50,028 estimated positive-`oPos.w` positions, 45,092 were in the depth interval. A
-    second frame 4,320 run with `RECOMP_GL_DIRECT=0` was also black and showed the same pattern (498 draws
-    / 139,402 indices, three in-view composite positions, no in-view world positions). Those were CPU
-    interpreter estimates, not GPU output. A later desktop OpenGL transform-feedback capture on black
-    frame 2,668 read the generated `oPos` and `gl_Position` for 47 programmable-VSH batches to the
-    640×480 back buffer. On the 2,382-index world batch, GPU and CPU results agreed: 1,537 positive-w
-    vertices, none inside the view, and nearly identical bounds (`-16366,-132157:-79,786`). The
-    1,830-index world batch also matched, with no vertices inside. The only in-view rectangle was the
-    full-screen post-process quad. This verifies the OpenGL shader output against the CPU estimate for
-    these draws and confirms that world geometry is projected outside the viewport in this captured view;
-    the guest input/state that produced those coordinates is still unknown. The direct-format attribute
-    path is unlikely to be the sole cause. The current-source Linux OpenGL build also reproduced the black
-    screen, so the failure is not Vulkan-specific. Global depth probes also stayed black, but changed
-    shadow visibility and draw ordering and were inconclusive. Upstream xemu's VSH template has the same
-    broad screen-to-clip x/y and clip-range z conversion shape as the port
-    ([reference](https://github.com/xemu-project/xemu/blob/master/hw/xbox/nv2a/pgraph/glsl/vsh-prog.c));
-    compare the shared vertex inputs and constants before changing that conversion.
-    A corrected OpenGL capture on black frame dump 2,100 replayed indexed batches as points with
-    rasterization discarded, so each index produced one captured vertex without changing the frame.
-    On the 747-index world batch, all 747 CPU vertices had negative `oPos.w` and the GPU reported no
-    positive-w vertices. On the 1,082-index batch, CPU and GPU both reported 80 positive-w vertices, none
-    inside 640×480, with matching projected bounds (CPU `-31283.3,-247017.6:-483.7,-2521.8`; GPU
-    `-31283.1,-247015.9:-483.7,-2521.8`). This confirms the out-of-view result for those OpenGL draws;
-    it does not identify the bad guest state or validate Vulkan/Switch output. The captured menu frame is
-    still black; the black-screen issue remains open. The captured 33-slot VSH program contains no MAC
-    ARL instruction (opcode 13), so ARL rounding is not a cause for this sample; compare its other
-    instructions and guest inputs against xemu.
-    Final Linux Vulkan probe: with `RECOMP_VK_DEPTH_ALWAYS_OPAQUE=1` confirmed active, the 640×480 dump
-    at frame 2,100 remained fully black; frame 2,101 still issued 700 draws. Forcing opaque depth tests to
-    pass is not sufficient to recover this menu view. The run reached at least frame 2,792 without a
-    recorded exception or renderer crash. A detailed attempt-by-attempt report is in
-    [15-black-screen-investigation-summary.md](15-black-screen-investigation-summary.md).
-    Do not treat bit 20 as a W-buffer flag or implement a W-depth path from that assumption.
-  - Fix to try, in order:
-    1. Inspect the vertex attributes, VSH constants/program and guest camera state for representative
-       world draws whose GPU output is outside the viewport; compare those values and outputs with xemu.
-    2. Check the same guest state across an earlier partially visible frame and the first fully black frame
-       to see which inputs or camera values move geometry out of view.
-    3. Verify Vulkan and Switch output against the validated OpenGL/CPU positions for matching draws.
-    4. Confirm the meaning of `Z_PERSPECTIVE_ENABLE` and `SET_ZMIN_MAX_CONTROL` from authoritative NV2A
-       behavior, then test depth and clip handling independently using the stable clear/compare state.
-    5. Verify with `RECOMP_FRAME_TRACE` + the red-clear test (force the back-buffer clear colour in
-       `clear_color_argb()`, the hack is not committed) and with frames 3,700–6,500 of an idle run
-       (`tools/live_linux.sh`, title flythrough), then on Switch.
-    6. Once the game reaches a playable scene, tune output scaling and aspect ratio separately; matching
-       the Switch display is not a prerequisite for the first Linux gameplay milestone.
+- [x] **Most of the 3D scene missing, then a black title screen** (Linux and Switch).
+  - Culprit (found 2026-10-17): the lifter emitted the x87 instruction `fincstp` as a comment. The game's
+    rotation-matrix builder `sub_003E2E60` runs three `fsincos`, sets `cos·scale` aside with `fincstp` and
+    reads it back as `st(6)`; as a no-op the stack ran one slot off and row 0 of every roll matrix came out
+    zero. `sub_00046490` multiplies the camera's look-at (`sub_0029BCA0`, itself correct) by that roll
+    matrix, so the camera view collapsed onto its y axis and the world projected tens of thousands of pixels
+    off screen. All depth, clip and cull theories (including `SET_CONTROL0` bit 20 as a w-buffer flag) were
+    wrong leads; the renderer was drawing what it was given.
+  - Fix (done 2026-10-17, commit 1bc623e): `fincstp`/`fdecstp` move `g_fp_top` (`lifter.py`, test in
+    `test_lifter_fpu.py`). The title tavern renders. How it was found, step by step: 2026-10-17 entries in
+    [09-bringup-log.md](09-bringup-log.md) and [15-black-screen-investigation-summary.md](15-black-screen-investigation-summary.md).
+- [ ] **Level load stops on an unresolved call** (Linux, Dumbots → Beach Dead, 2026-10-17).
+  - Culprit: `[ICALL] Failed to resolve VA 0x00359E00`, then a null function pointer; the pushbuffer stopped.
+    `0x00359E00` follows a jump table and `int3` padding and tail-jumps to `0x00359FF0`, which starts right
+    after `sub_00359F80`'s `ret`. Neither was found by the static pass.
+  - Fix: both seeded in `config/seed_functions.json`; full regen done (21,284 of 21,286 functions). Rebuild,
+    load Beach Dead again, tick when the level plays.
+- [ ] **Other x87 instructions the lifter leaves as comments** (`/* FPU: ... */` in `gen/`).
+  - Culprit: no translation for `fcmovnbe` (2 sites, `sub_00458494`), `ficom`/`ficomp` (`sub_0018DEC2`, looks
+    like data decoded as code), `fxtract` (`sub_00459020`), `fnsave`/`frstor` (`sub_004716D8`); `fbld` and
+    `fisttp` sit in data decoded as code. `fnclex` and `ffree` are harmless as no-ops.
+  - Fix: implement `fcmov*` and `fxtract` (CRT-area code, so likely reachable from math functions); check
+    whether `sub_0018DEC2` is real code before doing `ficom`.
 - [x] **Switch: extended-VMA commits refused (`0xCE01`)** when a title re-commits a growing range from the
   same base.
   - Culprit: the Switch `VirtualAlloc` only recognises a range inside one existing mapping, so the larger
