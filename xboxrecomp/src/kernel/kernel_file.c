@@ -787,6 +787,29 @@ static NTSTATUS errno_to_status(int e)
     }
 }
 
+/* The status for a path that does not exist. NT tells a missing parent
+ * directory (OBJECT_PATH_NOT_FOUND, which XAPI reports as
+ * ERROR_PATH_NOT_FOUND) apart from a missing last component
+ * (OBJECT_NAME_NOT_FOUND, ERROR_FILE_NOT_FOUND); ENOENT covers both.
+ * Recursive "make directory" helpers climb to the parent only on the first:
+ * Conker's (sub_001F1E80) asks GetFileAttributes, creates the parents on
+ * ERROR_PATH_NOT_FOUND and the directory alone on ERROR_FILE_NOT_FOUND. */
+static NTSTATUS missing_path_status(const char *host_path)
+{
+    char parent[MAX_PATH];
+    char *slash;
+    struct stat pst;
+
+    snprintf(parent, sizeof(parent), "%s", host_path);
+    slash = strrchr(parent, '/');
+    if (slash && slash != parent) {
+        *slash = '\0';
+        if (stat(parent, &pst) != 0 || !S_ISDIR(pst.st_mode))
+            return STATUS_OBJECT_PATH_NOT_FOUND;
+    }
+    return STATUS_OBJECT_NAME_NOT_FOUND;
+}
+
 /* The descriptor of a directory handle on hosts that cannot open() one. */
 #define XBOX_DIR_FD (-2)
 
@@ -916,25 +939,8 @@ NTSTATUS __stdcall xbox_NtCreateFile(
     if (fd < 0 && fd != XBOX_DIR_FD) {
         int e = errno;
         NTSTATUS st = errno_to_status(e);
-        /* NT tells a missing parent (OBJECT_PATH_NOT_FOUND, which XAPI turns
-         * into ERROR_PATH_NOT_FOUND) apart from a missing last component
-         * (OBJECT_NAME_NOT_FOUND); ENOENT covers both. Recursive "make
-         * directory" helpers climb to the parent only on the first: Conker's
-         * cache code creating Z:\texture\frontend\tips on an empty cache got
-         * NAME_NOT_FOUND, never created the parents, and went to its fatal
-         * screen. */
-        if (e == ENOENT) {
-            char parent[MAX_PATH];
-            char *slash;
-            struct stat pst;
-            snprintf(parent, sizeof(parent), "%s", host_path);
-            slash = strrchr(parent, '/');
-            if (slash && slash != parent) {
-                *slash = '\0';
-                if (stat(parent, &pst) != 0 || !S_ISDIR(pst.st_mode))
-                    st = STATUS_OBJECT_PATH_NOT_FOUND;
-            }
-        }
+        if (e == ENOENT)
+            st = missing_path_status(host_path);
         XBOX_TRACE(XBOX_LOG_FILE, "NtCreateFile FAILED: %s (errno=%d)", host_path, e);
         if (IoStatusBlock) {
             IoStatusBlock->Status = st;
@@ -1246,7 +1252,7 @@ NTSTATUS __stdcall xbox_NtQueryFullAttributesFile(
     if (!xbox_path || !xbox_translate_path(xbox_path, host_path, MAX_PATH))
         return STATUS_OBJECT_PATH_NOT_FOUND;
     if (stat(host_path, &st) != 0)
-        return STATUS_OBJECT_NAME_NOT_FOUND;
+        return missing_path_status(host_path);
 
     unix_to_filetime(st.st_ctime, 0, &FileInformation->CreationTime);
     unix_to_filetime(st.st_atime, 0, &FileInformation->LastAccessTime);

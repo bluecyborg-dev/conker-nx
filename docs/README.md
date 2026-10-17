@@ -28,6 +28,8 @@ Written 2026-10-16 from two sources:
 | [09-bringup-log.md](09-bringup-log.md) | What was done, in order: analysis results, every hook address and its evidence |
 | [10-building.md](10-building.md) | Building the NRO: native devkitPro (current) or BO1's Docker way, the NVK driver, A/B builds |
 | [11-testing-on-console.md](11-testing-on-console.md) | Wi-Fi test loop with nxlink: SD layout, launch arguments, getting logs back, failure modes |
+| [12-porting-guide.md](12-porting-guide.md) | Technical architecture and reusable workflow for future original-Xbox-to-Switch ports |
+| [13-build-process.md](13-build-process.md) | Reproducible regeneration, container validation, Switch build, staging, and upload process |
 
 ## The five things to remember
 
