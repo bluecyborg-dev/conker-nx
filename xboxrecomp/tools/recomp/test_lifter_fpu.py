@@ -16,6 +16,19 @@ class FpuLifterTest(unittest.TestCase):
             ["{ double _t = fp_top(); fp_push(_t); } /* fld st(0) */"],
         )
 
+    def test_fincstp_and_fdecstp_move_the_top_without_popping(self):
+        inc = Instruction(0, 2, "fincstp", "", "d9f7")
+        dec = Instruction(0, 2, "fdecstp", "", "d9f6")
+
+        self.assertEqual(
+            Lifter().lift_instruction(inc),
+            ["g_fp_top = (g_fp_top + 1u) & 7u; /* fincstp */"],
+        )
+        self.assertEqual(
+            Lifter().lift_instruction(dec),
+            ["g_fp_top = (g_fp_top + 7u) & 7u; /* fdecstp */"],
+        )
+
     def test_fst_does_not_pop_and_fstp_does(self):
         operand = Operand(type="mem", mem_base="esp", mem_disp=0x18,
                           mem_size=4)

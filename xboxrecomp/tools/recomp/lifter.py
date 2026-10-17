@@ -3888,6 +3888,18 @@ class Lifter:
             return [f"fp_push(0.0); /* fldz */"]
         if m == "fld1":
             return [f"fp_push(1.0); /* fld1 */"]
+        # fincstp/fdecstp move the stack top without touching a register, so
+        # a value can be set aside and read back later as st(6). Conker's
+        # rotation-matrix builder (sub_003E2E60) does exactly that after
+        # three fsincos; as a no-op the stack ran one slot off, row 0 of
+        # every roll matrix came out zero and the camera view collapsed.
+        if m == "fincstp":
+            return ["g_fp_top = (g_fp_top + 1u) & 7u; /* fincstp */"]
+        if m == "fdecstp":
+            return ["g_fp_top = (g_fp_top + 7u) & 7u; /* fdecstp */"]
+        if m == "ffree":
+            # Only the tag word changes; the runtime keeps no tags.
+            return [f"/* ffree {insn.op_str}: tag only */"]
 
         return [f"/* FPU: {m} {insn.op_str} */"]
 
