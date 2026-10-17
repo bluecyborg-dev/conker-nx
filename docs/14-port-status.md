@@ -12,8 +12,14 @@ black), after widening 16-bit clear colours. Only the ground near the camera sho
 **CURRENT** issue below (w-buffering).
 
 **Builds:** Linux bench `build/linux-vk/conker_recomp`. Newest Switch NRO
-`analysis/elf_archive/conker-vulkan_dc06e7ee.nro` (2 MB extended-VMA granules), not yet run on hardware.
-The last NRO run on hardware is `31500df5`.
+`analysis/elf_archive/conker-vulkan_3f85b158.{nro,elf}` (commit d386a80: 16-bit clears, present the last
+surface drawn, 2 MB extended-VMA granules).
+
+**Last hardware run (2026-10-17, NRO `3f85b158`, log `run/net_logs/20261017-020541.log`):** boots, plays
+the intro, intro skipped with a button press, then a **black screen with the menu music playing**. The front
+end runs at 20 FPS (steady 50 ms frames, 605–669 draws), reached frame 982 with no `[ICALL]`, `[STUB]`,
+exception or `0xCE01` in the log. This matches the Linux bench: the scene is clipped (w-buffering, the
+CURRENT issue below), so the console needs no separate fix for the picture.
 
 ## Milestones
 
@@ -26,6 +32,7 @@ The last NRO run on hardware is `31500df5`.
 | 2026-10-17 | Boots and plays the intro movie on a console (NRO `31500df5`) | Switch |
 | 2026-10-17 | Profiles menu reached and driven by pad scripts (Start pressed early) | Linux |
 | 2026-10-17 | Title-screen 3D flythrough partly draws (shadow maps cleared white, right surface presented) | Linux |
+| 2026-10-17 | Front end runs on the console with its music and no memory errors (picture still black: w-buffering) | Switch |
 
 Next milestones: the whole title scene draws (w-buffering); main menu → new game; first
 gameplay frame; first gameplay frame on the console.
@@ -78,13 +85,15 @@ and say how.
     4. Verify with `RECOMP_FRAME_TRACE` + the red-clear test (force the back-buffer clear colour in
        `clear_color_argb()`, the hack is not committed) and with frames 3,700–6,500 of an idle run
        (`tools/live_linux.sh`, title flythrough), then on Switch.
-- [ ] **Switch: extended-VMA commits refused (`0xCE01`)** when a title re-commits a growing range from the
+- [x] **Switch: extended-VMA commits refused (`0xCE01`)** when a title re-commits a growing range from the
   same base.
   - Culprit: the Switch `VirtualAlloc` only recognises a range inside one existing mapping, so the larger
     second commit tried to map pages already mapped.
-  - Fix: done in code (6ab1239: 2 MB granules committed once, shared-memory fallback up to 2 MB). Tick after
-    NRO `dc06e7ee` or later runs on hardware without the error.
-- [ ] **Switch front end runs at 20 FPS** (steady 50 ms frames, 540–860 draws).
+  - Fix (done, verified on hardware 2026-10-17 with NRO `3f85b158`): 6ab1239 commits 2 MB granules once.
+    The run logged no `0xCE01` and did not need the shared-memory fallback even once (the run with NRO
+    `31500df5` used it 12 times).
+- [ ] **Switch front end runs at 20 FPS** (steady 50 ms frames, 540–860 draws; again 20 FPS with 605–669
+  draws on NRO `3f85b158`, while most of the scene is still clipped, so expect worse once it draws).
   - Culprit: unknown until profiled; draw submission cost on NVK or the guest's own CPU time.
   - Fix: `RECOMP_NX_PROFILE=1` on hardware once the picture is right; levers in [06-performance.md](06-performance.md).
 - [ ] **Intro movie decodes slowly on Switch** (50–117 ms frames).

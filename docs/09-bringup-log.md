@@ -136,3 +136,12 @@ commits refused with `0xCE01` when the game re-commits a growing range from one 
 so the second commit re-mapped pages already mapped. `extvma_commit()` in `guest_vmem.c` now commits whole
 2 MB granules once and keeps them; the Horizon shared-memory fallback ceiling went from 128 KB to 2 MB. NRO
 `analysis/elf_archive/conker-vulkan_dc06e7ee.nro` has it; not yet run on hardware.
+
+## 2026-10-17: console run of NRO `3f85b158` (commit d386a80)
+
+Log `run/net_logs/20261017-020541.log` (the first upload attempt, `-020451.log`, failed to connect: the
+NetLoader was not open yet). Boot and intro as before; after skipping the intro the screen stays **black with
+the menu music playing**. 20 FPS (50 ms frames, 605–669 draws), frame 982 reached, no `[ICALL]`, `[STUB]` or
+exception. No `0xCE01` and no shared-memory fallback at all: the 2 MB extended-VMA granules (6ab1239) are
+verified on hardware. The black picture is the w-buffering problem found on the Linux bench (most of the
+scene clipped), not a console-only fault.
