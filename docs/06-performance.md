@@ -57,6 +57,31 @@ Together these took the NFSU2 console race from ~17 to 19.5-22.7 fps.
   a frame trace.
 - Lower resolution does nothing while CPU-bound.
 
+## Next candidates (from the guide, 2026-10-17)
+
+Recorded for when performance work resumes; none tried yet. Where Conker stands (console, NRO `084306cc`,
+log `run/net_logs/20261017-163543.log`): 25–30 FPS in the training level with 20 FPS stretches where the GPU
+executor reaches ~70 % of a core (game thread ~40 %); Windmill 24–25 FPS with the game thread at 65–91 %.
+Earlier executor profile: `memmove` 6.9 %, `memcmp` 6.1 %, `nv2a_pb_scan` 4.3 %, `nv2a_pb_exec_method`
+7.7 % of its samples. Sources: the guide's `02-how-the-switch-works.md`, `03-switch-performance.md` and the
+Black Ops / Prototype research (`platforms/xbox-360/black-ops/`).
+
+| # | Candidate | Why it may help Conker | Notes |
+|---|---|---|---|
+| 1 | **Fourth CPU core** through an NSP forwarder: `highest_cpu_id` 3 in both NPDM tables (ACID and ACI0), then thread core masks | Game thread and executor each need most of a core; the APU frame thread (~11 %), the NV2A flag thread and the kernel timer thread could move to core 3 | Core 3 is shared with system services, not exclusive. The forwarder needs the user's own `prod.keys` (never committed or published). The Black Ops decision: forwarder, not a patched `atmosphere/hbl.nsp`. Prototype 2 keeps audio on core 3 |
+| 2 | **PGO trained on the console** | Lifted code is branchy and the game thread is the limit in Windmill; SA2 gained ~15 % | Instrumented build dumps gcov counters to `sdmc:/pgo` every 3 minutes (`__gcov_dump` + `__gcov_reset` on a helper thread), because the game is closed with HOME and never flushes at exit. Arc counts only (`-fno-profile-values`), same GCC and build-directory layout for the generate and use builds. Training builds stall: never benchmark them |
+| 3 | **LTO + `-fipa-pta`** | Cross-function inlining in `gen/` and the runtime | Needs ~16 GB RAM for the link; check the Docker VM's limit |
+| 4 | **Hot functions first in `.text`** (linker order from console samples) | ~21,000 lifted functions against a 48 KB I-cache | `tools/prof_log_report.py` already names the hot functions; keep `.crt0` first |
+| 5 | **Less copying and comparing in the executor** | `memmove` + `memcmp` were ~13 % of the executor | Find the callers with `prof_log_report.py --callers` (`[profile-lr]`); the Prototype ports hash less in the renderer, and SA2 fingerprints with the A57's CRC32 instructions instead of XXH3 |
+| 6 | **Native NEON memcpy/memset for the guest CRT's versions** | Guest copies run as lifted byte loops | Guard each replacement by a hash of the guest bytes; verify the first calls against the lifted version (the Prototype pattern: first 256 calls both ways, a mismatch disables the native path) |
+| 7 | **Native hot game routines with verification** | Only after a console profile names a game function worth it | Same verification pattern as 6 |
+| 8 | **GPU: no compute/graphics alternation** | Every switch between compute and drawing idles this GPU | The renderer's post passes (depth conversion, FXAA) are graphics passes; keep it that way. Depth is already D24S8 on the console (`[VK] ready: ... depth D24S8`), so the "64-bit depth on NVIDIA" warning does not apply |
+
+Clocks: benchmark at stock clocks and note docked/handheld. CPU boost mode raises the CPU but drops the GPU
+to a very low clock: at most for loading, never for gameplay. Do not hold a temperature-sensor (`ts`) session
+open for the whole game (it coincided with Horizon OC's clock service crashing under load in the Prototype
+ports).
+
 ## How to measure
 
 - **Console only, stock clocks, one change per run behind a setting, A/B back to back.** Check the env file

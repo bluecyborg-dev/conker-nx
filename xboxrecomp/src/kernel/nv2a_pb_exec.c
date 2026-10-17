@@ -3590,6 +3590,22 @@ static void raw_batch(void)
         s_vtx_epoch++;
     rb.vp_prog_gen = s_vp.prog_gen ? s_vp.prog_gen : 1;
     rb.vp_const_gen = s_vp.const_gen ? s_vp.const_gen : 1;
+    /* RECOMP_DOF=0: drop a draw that samples the depth buffer it is drawing
+     * with -- Conker's cutscene depth of field, a full-screen blend of a
+     * blurred copy weighted by depth (its glow pass reads the depth with no
+     * depth buffer bound and is kept). For a title whose blur reads wrong. */
+    {
+        static int dof = -1;
+        if (dof < 0) {
+            const char *e = getenv("RECOMP_DOF");
+            dof = !(e && *e == '0');
+        }
+        if (!dof && rb.zeta_va)
+            for (i = 0; i < 4; i++)
+                if ((s_reg[(0x1B0Cu + i * 0x40u) / 4] & 0x40000000u)
+                    && rb.tex_va[i] == rb.zeta_va)
+                    return;
+    }
     if (nv2a_raw_batch_hook)
         nv2a_raw_batch_hook(&rb, s_raw_attrs);
     scanout_present(rb.color_va);

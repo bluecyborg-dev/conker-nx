@@ -26,6 +26,7 @@
 | `RECOMP_FILE_TRACE=1` / `=2` | every `NtCreateFile` with path, access, disposition, options and result; `=2` adds the code addresses on the guest stack (callers) |
 | `RECOMP_FRAME_TRACE_DRAWS=<lo>-<hi>` | frame-trace draws lo..hi of every frame (counted from 0 after each flip): reaches into a long frame without flips, such as a loading screen, which a flag file armed at a flip cannot time |
 | `RECOMP_SURF_STATS=1` | for every frame over 2,000 draws: draws per target surface, the scan-out address (`PCRTC_START`) and how often it changed, the control methods (`0x0100`–`0x01FF`, semaphores, other subchannels) and the first 48 runs of consecutive draws to one surface. Says how a frame that never flips is shown |
+| `RECOMP_DOF=0` / `=1` | drop / keep draws that sample the depth buffer they are bound to (Conker's cutscene depth of field); Conker defaults to 0 (`src/main.c`) |
 | `RECOMP_SCANOUT_PRESENT=0` | turn off presenting the scanned-out buffer when a title draws into it without flipping (on by default: loading screens) |
 | `RECOMP_SKIP_DRAWS=<lo>-<hi>` | drop draws lo..hi of every frame (counted from 0 after each flip) to bisect a wrong frame: skip a range, look at the dump, narrow it down |
 | `RECOMP_SKIP_BLEND=<src>/<dst>` (hex, e.g. `306/0`) / `RECOMP_SKIP_INLINE=1` | drop every draw with that blend pair / every inline-vertex draw |

@@ -515,3 +515,19 @@ guest format a view with its decode as a component swizzle (0x41, 0x3F, 0x40, 0x
 0x41 texels are unchanged). On the Linux bench the wake-up scene now opens blurred (waking up), then keeps
 Conker sharp with the near flowers and the background soft; before, the near grass was sharp and Conker
 blurred. NRO `084306cc` carries this and the loading-screen present to the console.
+
+## 2026-10-17: console run of NRO `084306cc`; cutscene depth of field off by default
+
+The user played further than before (log `run/net_logs/20261017-163543.log`): TrainingLevel, TrainingCave,
+ThroneRoom, Windmill, with no crash or `[ICALL]`. Gameplay "better than ever"; the training-area loads no
+longer freeze (the scan-out present ran; no multi-second frame on those loads). Some cutscenes are clear now
+(talking with Birdy) but others still blur the whole screen. Only `BootIntro.xmv` is opened in the whole run,
+so every cutscene is in-engine and the blur is the game's depth of field as we draw it. At the user's
+request it is off by default: `RECOMP_DOF=0` (set in `src/main.c`) makes the executor drop any draw that
+samples the depth buffer it is bound to, which in Conker is only the depth-of-field composite (the glow
+pass reads the depth with no depth buffer bound). `RECOMP_DOF=1` brings it back for further work.
+
+Frame rate: 25–30 FPS in the training level with 20 FPS stretches (executor ~70 % of a core), 24–25 FPS in
+Windmill (game thread 65–91 %). First visits to ThroneRoom and Windmill stalled 4–6 s compiling 18–20
+shaders. The guide's newer optimisation findings (fourth core, console PGO, LTO, code ordering, executor
+copies) are recorded as candidates in [06-performance.md](06-performance.md).

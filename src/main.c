@@ -327,6 +327,10 @@ static int game_main(void)
      * with world positions in fixed-function mode; kept on until Conker's
      * frame traces say otherwise. */
     setenv("RECOMP_INLINE_FFP", "1", 0);
+    /* Cutscene depth of field off: with the depth read in the right byte
+     * order some shots are clear, but others still blur the whole screen
+     * (user, 2026-10-17). RECOMP_DOF=1 brings it back. */
+    setenv("RECOMP_DOF", "0", 0);
 #endif
 #if defined(__SWITCH__)
     /* Every periodic log line flushes to the SD card; keep the log to what

@@ -14,10 +14,18 @@ much smoother and gameplay better and more stable. **Focus: the known issues (cu
 screens), then more headroom** (60 FPS if possible, low input lag) without lowering quality.
 
 **Builds:** Linux bench `build/linux-vk/conker_recomp`. Newest Switch NRO
-`analysis/elf_archive/conker-vulkan_084306cc.{nro,elf}` (the 30 FPS build plus the loading-screen present
-and the depth-of-field byte order), not yet run on hardware.
+`analysis/elf_archive/conker-vulkan_084306cc.{nro,elf}` (commit a71eec6: the 30 FPS build plus the
+loading-screen present and the depth-of-field byte order), run on hardware. The next build adds
+`RECOMP_DOF=0` by default.
 
-**Last hardware run (2026-10-17, NRO `0678347d`, log `run/net_logs/20261017-152423.log`):** played by the
+**Last hardware run (2026-10-17, NRO `084306cc`, log `run/net_logs/20261017-163543.log`):** played by the
+user through TrainingLevel, TrainingCave, ThroneRoom and Windmill; no crash or unresolved call. Gameplay
+"better than ever"; the loads into the training areas no longer freeze (no multi-second frame); some
+cutscenes now clear (talking with Birdy), others still blurred over the whole screen, so the cutscene depth
+of field is now off by default (below). 25–30 FPS in the training level with some 20 FPS stretches, 24–25
+in Windmill; first visits to ThroneRoom and Windmill stalled 4–6 s compiling shaders (cached afterwards).
+
+**Previous hardware run (2026-10-17, NRO `0678347d`, log `run/net_logs/20261017-152423.log`):** played by the
 user. 30.0 FPS in 34 of the run's 10-second windows and 29–30 in most others; menu transitions a lot
 smoother; gameplay better and more stable. Still there: very very minor stutters (not a focus), blurry
 cutscene shots, and no loading screen between sections (the game froze for a couple of seconds instead, for
@@ -107,7 +115,11 @@ and say how.
     by the sample.
   - Fix (commit d300139): the sampler takes the nearest fixed border colour, colour before alpha.
 - [ ] **Some cutscene shots blurry, some sharp** (Switch, user report). Still there on NRO `688d985e` and
-  `0678347d`. **Fixed on the Linux bench, verify on the console** (NRO `084306cc`).
+  `0678347d`. On NRO `084306cc` some cutscenes are clear (Birdy) but others still blur the whole screen
+  (no cutscene is a movie: only `BootIntro.xmv` is ever opened). **Workaround (user's call): the cutscene
+  depth of field is off by default** (`RECOMP_DOF=0` in `src/main.c`; the executor drops a draw that
+  samples the depth buffer it is bound to; `RECOMP_DOF=1` brings it back). Open question for later: why
+  some shots still blur everything (focus constants, the stencil byte, or the depth scale).
   - Culprit, in two parts. (1) The game reads its Z24S8 depth buffer as a colour texture; the depth lived
     only in a Vulkan image, so the texture came from stale guest bytes (fixed in 00f1cb4 by converting the
     depth on the GPU). (2) That conversion wrote the texels of one format, `LIN_R8G8B8A8` (0x41), which is
@@ -122,10 +134,10 @@ and say how.
     `nv2a_vk.c`: 0x41, 0x3F, 0x40, 0x12, 0x1E). The wake-up scene now opens blurred, then holds Conker in
     focus with the near flowers and the background soft. Stencil is still not converted (the depth of
     field does not use it).
-- [ ] **No loading screen between sections; the game looks frozen for a few seconds instead** (Switch,
+- [x] **No loading screen between sections; the game looks frozen for a few seconds instead** (Switch,
   user report on NRO `0678347d`: entering the area with the first weapon in the training level; the same
-  happens loading the training level from the profile menu on Linux). **Fixed on the Linux bench, verify
-  on the console** (NRO `084306cc`).
+  happens loading the training level from the profile menu on Linux). Fixed (commit a19d7b2); on NRO
+  `084306cc` the training-area loads no longer freeze.
   - Culprit: Conker's loader never flips. Each loading step draws a progress-bar sliver into the back
     buffer (`80964000`) and then copies the whole back buffer into the front one (`80A90000`, the buffer
     the CRTC scans out) with a full-screen quad, a fence after each pair: 13,400 draws and one flip in 13.6
@@ -191,7 +203,8 @@ and say how.
     Hz in menus): the timer thread delivers vblanks late or the game paces itself another way. Then the
     game thread's own hot functions (`tools/prof_log_report.py`).
   - Fix: find what paces the frame (vblank, flip retire, the game's own timer) before optimising further;
-    levers in [06-performance.md](06-performance.md).
+    levers in [06-performance.md](06-performance.md), whose "Next candidates" table lists what the guide's
+    newer ports found (fourth core, console PGO, LTO, code ordering, less copying in the executor).
 - [ ] **Intro movie decodes slowly on Switch** (50–117 ms frames).
   - Culprit: CPU-side XMV decode and the YUV→RGB conversion in lifted code.
   - Fix: a native YUV converter as Burnout 3's port has; find Conker's converter first.
