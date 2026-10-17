@@ -10,7 +10,8 @@
 #   tools/live_linux.sh log [N]          # last N log lines
 #   tools/live_linux.sh stop
 #
-# Environment: DUMPN (default 30), EXTRA ("VAR=1 VAR2=2"), BIN.
+# Environment: DUMPN (default 30), EXTRA ("VAR=1 VAR2=2"), BIN, KEEP_DUMPS (newest frame dumps
+# kept, default 300: a long run at DUMPN=15 once filled the disk with 9 GB of BMPs and hung Docker).
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -33,7 +34,8 @@ start)
     for kv in ${EXTRA:-}; do envs+=(-e "$kv"); done
     docker run -d --name "$NAME" --cap-add=SYS_PTRACE --security-opt seccomp=unconfined \
         -v "$REPO":/work -w /work/run/live "${envs[@]}" conker-dev \
-        bash -c "exec /work/$BIN > /work/run/live/run.log 2>&1" >/dev/null
+        bash -c "while sleep 20; do ls -t /work/run/live/d/*.bmp 2>/dev/null | tail -n +${KEEP_DUMPS:-300} | xargs -r rm -f; done &
+                 exec /work/$BIN > /work/run/live/run.log 2>&1" >/dev/null
     echo "started $NAME (log run/live/run.log, frames run/live/d/)"
     ;;
 press)

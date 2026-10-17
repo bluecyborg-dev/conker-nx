@@ -302,7 +302,13 @@ typedef struct {
     uint32_t va, pw, ph;
     VkImage image; VkImageView view; VkDeviceMemory mem;
     uint32_t used;
+    /* Sampled as a texture (depth_as_texture): a depth-only view, and the
+     * depth converted to the bytes the guest would read at its address. */
+    VkImageView zview;
+    VkImage cimage; VkImageView cview; VkDeviceMemory cmem;
+    uint32_t gen, cgen;         /* bumped by depth writes and clears / at conversion */
 } VkDepthBuf;
+static void depth_free(VkDepthBuf *d);
 
 #define VK_MAX_SURF 32
 #define VK_MAX_DEPTH 16
@@ -662,11 +668,20 @@ static void rescale_surfaces(double k)
     }
     for (i = 0; i < VK_MAX_DEPTH; i++)
         if (s_depth[i].image) {
-            garbage_add(s_depth[i].image, s_depth[i].view, s_depth[i].mem);
+            depth_free(&s_depth[i]);
             memset(&s_depth[i], 0, sizeof s_depth[i]);
         }
     if (copied)
         barrier_all();
+}
+
+static void depth_free(VkDepthBuf *d)
+{
+    garbage_add(d->image, d->view, d->mem);
+    if (d->zview)
+        garbage_add(VK_NULL_HANDLE, d->zview, VK_NULL_HANDLE);
+    if (d->cimage)
+        garbage_add(d->cimage, d->cview, d->cmem);
 }
 
 static VkDepthBuf *depth_get(uint32_t va, uint32_t pw, uint32_t ph)
@@ -685,17 +700,28 @@ static VkDepthBuf *depth_get(uint32_t va, uint32_t pw, uint32_t ph)
     d = victim;
     if (d->image) {
         if (s_rt_depth == d) end_rendering(), s_rt = NULL, s_rt_depth = NULL;
-        garbage_add(d->image, d->view, d->mem);
+        depth_free(d);
     }
     memset(d, 0, sizeof *d);
     d->va = va; d->pw = pw; d->ph = ph; d->used = s_frame;
     if (!make_image(pw, ph, s_depth_fmt, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-                    VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                    VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                     VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT,
                     &d->image, &d->view, &d->mem)) {
         LOGE("depth 0x%08X %ux%u: image creation failed\n", va, pw, ph);
         memset(d, 0, sizeof *d);
         return NULL;
+    }
+    {
+        VkImageViewCreateInfo vi = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+        vi.image = d->image;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vi.format = s_depth_fmt;
+        vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        vi.subresourceRange.levelCount = 1;
+        vi.subresourceRange.layerCount = 1;
+        if (vkCreateImageView(s_dev, &vi, NULL, &d->zview) != VK_SUCCESS)
+            d->zview = VK_NULL_HANDLE;
     }
     {
         VkClearDepthStencilValue z = { 1.0f, 0 };
@@ -1345,6 +1371,9 @@ volatile int nv2a_vk_cube_maps = 1;
 /* Stage i: its image view (a surface or a cached texture), sampler and
  * texcoord scale. Records uploads, so call it outside rendering or accept
  * that it ends the pass. */
+static VkImageView depth_as_texture(VkDepthBuf *d);   /* after the post-process pass */
+static VkDepthBuf *depth_find(uint32_t va);
+
 static void bind_stage(const uint32_t *regs, int i, float scale[2], VkDescriptorImageInfo *out,
                        VkSurf **sampled)
 {
@@ -1421,6 +1450,9 @@ static void bind_stage(const uint32_t *regs, int i, float scale[2], VkDescriptor
         out->imageView = rt->view;
         *sampled = rt;
         rt_scale(w, h, rt->w, rt->h, rt->aa_sx, rt->aa_sy, scale);
+    } else if (depth_find(va) && (out->imageView = depth_as_texture(depth_find(va))) != VK_NULL_HANDLE) {
+        /* converted depth (depth_as_texture); the normalised coordinates
+         * already span the buffer */
     } else {
         uint32_t texs = s_hz_texs;
         uint64_t t0 = hz_now();
@@ -3416,6 +3448,8 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
     }
     begin_rendering(s, d);
     s->dirty = 1;
+    if (d && r[0x35C / 4])
+        d->gen++;                               /* depth written: depth_as_texture */
     s->gen++;
     if (pipe != cur_pipe || cur_pipe_gen != s_cb_gen || s_pipe_foreign) {
         vkCmdBindPipeline(s_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
@@ -3676,6 +3710,8 @@ static void vk_clear(const Nv2aSurface *sf, const Nv2aRenderState *rs,
         argb_vec4(argb, ca[nca].clearValue.color.float32);
         nca++;
     }
+    if (d && (flags & 1))
+        d->gen++;                               /* depth_as_texture */
     if (d && (flags & 0x3)) {
         uint32_t zmax = s_regs ? zmax_of(s_regs) : 0xFFFFFFu;
         uint32_t z = zmax == 0xFFFFu ? (zstencil & 0xFFFF) : (zstencil >> 8);
@@ -3972,6 +4008,185 @@ static VkPipeline pp_pipe(VkFormat fmt)
     s_pp[i].fmt = fmt;
     s_pp[i].pipe = pipe;
     return pipe;
+}
+
+/* A texture at a depth buffer's address (Conker's depth of field reads its
+ * Z24S8 buffer as LIN_R8G8B8A8 to decide what to blur). The depth lives in a
+ * Vulkan depth image and never reaches guest memory, so the texture upload
+ * read stale bytes and the blur mask was arbitrary. Instead a full-screen
+ * pass converts the depth to the texels the guest's decode of those bytes
+ * gives: with the dword (z24 << 8) | stencil, R G B = z24's high, middle and
+ * low bytes. Stencil is not converted (alpha 0). Redone only when the depth
+ * changed (gen). */
+static VkPipeline s_zconv_pipe;
+static VkSampler  s_zconv_sampler;
+static int        s_zconv_failed;
+
+static const char s_zconv_fs[] =
+    "#version 450\n"
+    "layout(set = 0, binding = 0) uniform sampler2D src;\n"
+    "layout(location = 0) out vec4 o;\n"
+    "void main() {\n"
+    "    float d = texelFetch(src, ivec2(gl_FragCoord.xy), 0).r;\n"
+    "    uint z = uint(clamp(d, 0.0, 1.0) * 16777215.0 + 0.5);\n"
+    "    o = vec4(float((z >> 16) & 255u), float((z >> 8) & 255u), float(z & 255u), 0.0) / 255.0;\n"
+    "}\n";
+
+static VkPipeline zconv_pipe(void)
+{
+    VkGraphicsPipelineCreateInfo ci = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+    VkPipelineShaderStageCreateInfo st[2];
+    VkPipelineVertexInputStateCreateInfo vi = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+    VkPipelineInputAssemblyStateCreateInfo ia = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
+    VkPipelineViewportStateCreateInfo vp = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
+    VkPipelineRasterizationStateCreateInfo rs = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
+    VkPipelineMultisampleStateCreateInfo ms = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
+    VkPipelineColorBlendAttachmentState ba;
+    VkPipelineColorBlendStateCreateInfo cb = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
+    VkPipelineDynamicStateCreateInfo dy = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
+    VkPipelineRenderingCreateInfo rci = { VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+    static const VkDynamicState dyn[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkFormat fmt = VK_FORMAT_B8G8R8A8_UNORM;
+    VkShaderModule vs, fs;
+
+    if (s_zconv_pipe || s_zconv_failed)
+        return s_zconv_pipe;
+    s_zconv_failed = 1;                         /* until it is built */
+    if (!s_pp_layout)
+        pp_pipe(VK_FORMAT_B8G8R8A8_UNORM);      /* creates the shared layout */
+    if (!s_pp_layout)
+        return VK_NULL_HANDLE;
+    if (!s_zconv_sampler) {
+        VkSamplerCreateInfo sci = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+        sci.magFilter = sci.minFilter = VK_FILTER_NEAREST;   /* depth: no filtering */
+        sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        if (vkCreateSampler(s_dev, &sci, NULL, &s_zconv_sampler) != VK_SUCCESS)
+            return VK_NULL_HANDLE;
+    }
+    vs = compile(GLSLANG_STAGE_VERTEX, s_pp_vs);
+    fs = compile(GLSLANG_STAGE_FRAGMENT, s_zconv_fs);
+    if (vs && fs) {
+        memset(st, 0, sizeof st);
+        st[0].sType = st[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        st[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+        st[0].module = vs;
+        st[0].pName = "main";
+        st[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        st[1].module = fs;
+        st[1].pName = "main";
+        ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        vp.viewportCount = vp.scissorCount = 1;
+        rs.polygonMode = VK_POLYGON_MODE_FILL;
+        rs.lineWidth = 1.0f;
+        ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        memset(&ba, 0, sizeof ba);
+        ba.colorWriteMask = 0xF;
+        cb.attachmentCount = 1;
+        cb.pAttachments = &ba;
+        dy.dynamicStateCount = 2;
+        dy.pDynamicStates = dyn;
+        rci.colorAttachmentCount = 1;
+        rci.pColorAttachmentFormats = &fmt;
+        ci.pNext = &rci;
+        ci.stageCount = 2;
+        ci.pStages = st;
+        ci.pVertexInputState = &vi;
+        ci.pInputAssemblyState = &ia;
+        ci.pViewportState = &vp;
+        ci.pRasterizationState = &rs;
+        ci.pMultisampleState = &ms;
+        ci.pColorBlendState = &cb;
+        ci.pDynamicState = &dy;
+        ci.layout = s_pp_layout;
+        if (vkCreateGraphicsPipelines(s_dev, s_pcache, 1, &ci, NULL, &s_zconv_pipe) != VK_SUCCESS)
+            s_zconv_pipe = VK_NULL_HANDLE;
+    }
+    if (vs) vkDestroyShaderModule(s_dev, vs, NULL);
+    if (fs) vkDestroyShaderModule(s_dev, fs, NULL);
+    if (s_zconv_pipe)
+        s_zconv_failed = 0;
+    else
+        LOGE("depth-as-texture pipeline failed; depth textures read guest memory\n");
+    return s_zconv_pipe;
+}
+
+static VkImageView depth_as_texture(VkDepthBuf *d)
+{
+    VkPipeline pipe = zconv_pipe();
+    VkRenderingAttachmentInfo ca = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+    VkRenderingInfo ri = { VK_STRUCTURE_TYPE_RENDERING_INFO };
+    VkViewport vp;
+    VkRect2D sc;
+    VkDescriptorImageInfo ii;
+    VkWriteDescriptorSet wr = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+
+    if (!pipe || !d->zview)
+        return VK_NULL_HANDLE;
+    if (!d->cimage) {
+        if (!make_image(d->pw, d->ph, VK_FORMAT_B8G8R8A8_UNORM,
+                        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                        VK_IMAGE_ASPECT_COLOR_BIT, &d->cimage, &d->cview, &d->cmem)) {
+            d->cimage = VK_NULL_HANDLE;
+            return VK_NULL_HANDLE;
+        }
+        d->cgen = d->gen - 1;
+    }
+    if (d->cgen == d->gen)
+        return d->cview;
+    {
+        static int told;
+        if (!told++)
+            LOGE("depth 0x%08X %ux%u sampled as a texture: converted to its guest bytes\n",
+                 d->va, d->pw, d->ph);
+    }
+    end_rendering();
+    barrier_all();                              /* depth writes -> shader reads */
+    ca.imageView = d->cview;
+    ca.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    ca.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    ca.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    ri.renderArea.extent.width = d->pw;
+    ri.renderArea.extent.height = d->ph;
+    ri.layerCount = 1;
+    ri.colorAttachmentCount = 1;
+    ri.pColorAttachments = &ca;
+    p_begin_rendering(s_cb, &ri);
+    vkCmdBindPipeline(s_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+    vp.x = vp.y = 0.0f;
+    vp.width = (float)d->pw;
+    vp.height = (float)d->ph;
+    vp.minDepth = 0.0f;
+    vp.maxDepth = 1.0f;
+    sc.offset.x = sc.offset.y = 0;
+    sc.extent.width = d->pw;
+    sc.extent.height = d->ph;
+    vkCmdSetViewport(s_cb, 0, 1, &vp);
+    vkCmdSetScissor(s_cb, 0, 1, &sc);
+    ii.sampler = s_zconv_sampler;
+    ii.imageView = d->zview;
+    ii.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    wr.dstBinding = 0;
+    wr.descriptorCount = 1;
+    wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    wr.pImageInfo = &ii;
+    p_push_desc(s_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pp_layout, 0, 1, &wr);
+    vkCmdDraw(s_cb, 3, 1, 0, 0);
+    p_end_rendering(s_cb);
+    barrier_all();                              /* conversion -> the draw's reads */
+    s_pipe_foreign = 1;                         /* the next draw rebinds its own */
+    s_dyn_valid = 0;
+    s_cb_gen++;
+    d->cgen = d->gen;
+    return d->cview;
+}
+
+static VkDepthBuf *depth_find(uint32_t va)
+{
+    int i;
+    for (i = 0; i < VK_MAX_DEPTH; i++)
+        if (s_depth[i].image && s_depth[i].va == va)
+            return &s_depth[i];
+    return NULL;
 }
 
 /* Surface s without its top and bottom cy rows, FXAA'd and scaled into the
