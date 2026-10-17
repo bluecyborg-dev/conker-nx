@@ -3469,7 +3469,7 @@ static void raw_batch(void)
                 " | v0 %.1f %.1f %.4f %.3g  v1 %.1f %.1f  v2 %.1f %.1f"
                 " | d0 %08X a3 t%u s%u st%u @%08X | fin %08X/%08X aicw0 %08X f0 %08X bl %X %X/%X"
                 " | tsp %08X oin %08X cc %08X | c0 %08X %08X %08X c1 %08X %08X %08X"
-                " | at %X %X %u sfmt %08X | fog en %u mode %X col %08X p %08X %08X | ctl0 %08X zmm %08X clip %g %g\n",
+                " | at %X %X %u sfmt %08X | fog en %u mode %X col %08X p %08X %08X | ctl0 %08X zmm %08X clip %g %g | t0 fmt %08X addr %08X border %08X filter %08X\n",
                 rb.color_va, s_gpu.clip_x, s_gpu.clip_y, s_gpu.clip_w, s_gpu.clip_h, rb.zeta_va,
                 rb.xform, rb.vp_start, rb.prim, rb.index_count,
                 r->depth_test_enable, r->depth_func, r->depth_write,
@@ -3490,7 +3490,9 @@ static void raw_batch(void)
                 s_reg[0x02A4 / 4], s_reg[0x029C / 4], s_reg[0x02A8 / 4],
                 s_reg[0x09C0 / 4], s_reg[0x09C4 / 4],
                 /* raw SET_CONTROL0 and SET_ZMIN_MAX_CONTROL */
-                s_reg[0x0290 / 4], s_reg[0x1D78 / 4], r->depth_min, r->depth_max);
+                s_reg[0x0290 / 4], s_reg[0x1D78 / 4], r->depth_min, r->depth_max,
+                /* stage 0: format, address modes, border colour, filter */
+                s_reg[0x1B04 / 4], s_reg[0x1B08 / 4], s_reg[0x1B24 / 4], s_reg[0x1B14 / 4]);
         /* The three vertices above can misrepresent a large indexed mesh.
          * Summarize every index in this one traced frame so the bounds show
          * whether the draw reaches the render area at all. p[3] is 1/oPos.w,

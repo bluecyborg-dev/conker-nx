@@ -1313,7 +1313,10 @@ static VkSampler sampler_get(uint32_t key)
             ci.maxAnisotropy = (float)(key >> 20);
         }
     }
-    ci.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
+    /* Bits 12-13: the border colour class (see texture_bind). */
+    ci.borderColor = ((key >> 12) & 3) == 2 ? VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE
+                   : ((key >> 12) & 3) == 1 ? VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK
+                   : VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
     if (s_nsamplers == 512)
         s_nsamplers = 0;                    /* never in practice: 6 x 6 x 8 keys x levels */
     if (vkCreateSampler(s_dev, &ci, NULL, &s_samplers[s_nsamplers].s) != VK_SUCCESS)
@@ -1428,6 +1431,23 @@ static void bind_stage(const uint32_t *regs, int i, float scale[2], VkDescriptor
     addr = regs[base + 2];
     filter = regs[base + 5];
     key = (addr & 0xF0F);
+    /* Clamp to border (mode 4): the border is the stage's
+     * SET_TEXTURE_BORDER_COLOR (0x1B24), not always transparent black.
+     * Conker samples its projected shadow maps that way with a white border
+     * -- "no shadow" outside the map -- and the shadow passes multiply the
+     * scene by the sample, so a black border drew dark quads wherever the
+     * receiving geometry reached past the map (shadows ahead of and behind
+     * the character). Vulkan's fixed borders are opaque white, opaque black
+     * and transparent black; Conker's border is 0x00FFFFFF (white, alpha 0),
+     * so colour decides before alpha: a light border is opaque white. */
+    if ((addr & 0xF) == 4 || ((addr >> 8) & 0xF) == 4) {
+        uint32_t bc = regs[base + 9];
+        uint32_t a = bc >> 24, r = (bc >> 16) & 0xFF, g = (bc >> 8) & 0xFF, b = bc & 0xFF;
+        if (r + g + b >= 3 * 0x80)
+            key |= 2u << 12;
+        else if (a >= 0x80)
+            key |= 1u << 12;
+    }
     minf = (filter >> 16) & 0xFF;
     if (((filter >> 24) & 0xF) == 1) key |= 0x10000;
     if (minf == 1) key |= 0x20000;
