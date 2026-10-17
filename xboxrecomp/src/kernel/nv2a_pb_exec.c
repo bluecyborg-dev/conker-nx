@@ -1040,6 +1040,26 @@ static void current_surface(Nv2aSurface *out)
     out->clip_y          = s_gpu.clip_y;
 }
 
+/* The clear value is in the surface's own pixel format (the low 16 bits for a
+ * 16-bit surface); back ends store every colour surface as ARGB8888, so widen
+ * it. Conker clears its R5G6B5 shadow maps with 0xFFFF -- white -- which read
+ * as ARGB came out cyan and its shadow multiply passes blacked out the title
+ * screen. */
+static uint32_t clear_color_argb(void)
+{
+    uint32_t c = s_gpu.clear_color, r, g, b;
+    switch (s_gpu.format & 0xF) {
+    case 0x3:                               /* R5G6B5 */
+        r = (c >> 11) & 0x1F; g = (c >> 5) & 0x3F; b = c & 0x1F;
+        return 0xFF000000u | ((r << 3 | r >> 2) << 16) | ((g << 2 | g >> 4) << 8) | (b << 3 | b >> 2);
+    case 0x1: case 0x2:                     /* X1R5G5B5 */
+        r = (c >> 10) & 0x1F; g = (c >> 5) & 0x1F; b = c & 0x1F;
+        return 0xFF000000u | ((r << 3 | r >> 2) << 16) | ((g << 3 | g >> 2) << 8) | (b << 3 | b >> 2);
+    default:
+        return c;
+    }
+}
+
 static int sample_texture(const Texture *t, uint32_t u, uint32_t v, uint32_t *argb);
 
 int nv2a_backend_decode_texture(const Nv2aTexture *tex, uint32_t *argb_out)
@@ -1114,7 +1134,7 @@ static void clear_surface(uint32_t param)
             fprintf(stderr, "[FTRACE] clear %08X surf %08X clip %u,%u %ux%u colour %08X z %08X\n",
                     param, surf.color_va, s_gpu.clip_x, s_gpu.clip_y, s_gpu.clip_w, s_gpu.clip_h,
                     s_gpu.clear_color, s_gpu.zstencil_clear);
-        s_backend->clear(&surf, &s_gpu.rs, param, s_gpu.clear_color,
+        s_backend->clear(&surf, &s_gpu.rs, param, clear_color_argb(),
                          s_gpu.zstencil_clear);
         s_gpu.clears++;
         return;
@@ -3251,12 +3271,58 @@ static void attr_const_init(void);
 
 void (*nv2a_raw_batch_hook)(Nv2aRawBatch *rb, float *attrs);
 
+/* Draws of the current frame so far (reset at each flip): RECOMP_SKIP_DRAWS
+ * and RECOMP_SKIP_INLINE drop draws to bisect a wrong frame -- skip a range,
+ * look at the presented image, narrow it down. */
+static uint32_t s_frame_draw_no;
+
+static int debug_skip_draw(void)
+{
+    static int init;
+    static uint32_t skip_lo = 1, skip_hi = 0;
+    static int skip_inline;
+    uint32_t n = s_frame_draw_no++;
+
+    if (!init) {
+        const char *e = getenv("RECOMP_SKIP_DRAWS");      /* "lo-hi" */
+        init = 1;
+        if (e && sscanf(e, "%u-%u", &skip_lo, &skip_hi) != 2)
+            skip_lo = 1, skip_hi = 0;
+        e = getenv("RECOMP_SKIP_INLINE");
+        skip_inline = e && *e == '1';
+        if (skip_lo <= skip_hi || skip_inline)
+            fprintf(stderr, "  [PB] debug: skipping draws %u-%u of each frame%s\n",
+                    skip_lo, skip_hi, skip_inline ? " and every inline draw" : "");
+    }
+    if (skip_inline && s_gpu.inline_active)
+        return 1;
+    {
+        /* RECOMP_SKIP_BLEND=<src hex>/<dst hex>: drop every draw blending
+         * with those factors (e.g. 306/0, DST_COLOR/ZERO: multiply passes). */
+        static int binit;
+        static unsigned bsrc, bdst, bon;
+        if (!binit) {
+            const char *e = getenv("RECOMP_SKIP_BLEND");
+            binit = 1;
+            bon = e && sscanf(e, "%x/%x", &bsrc, &bdst) == 2;
+            if (bon)
+                fprintf(stderr, "  [PB] debug: skipping draws blending %X/%X\n", bsrc, bdst);
+        }
+        if (bon && s_reg[0x0304 / 4] && s_reg[0x0344 / 4] == bsrc
+                && s_reg[0x0348 / 4] == bdst)
+            return 1;
+    }
+    return n >= skip_lo && n <= skip_hi;
+}
+
 static void raw_batch(void)
 {
     Nv2aRawBatch rb;
     uint32_t lo = 0xFFFFFFFFu, hi = 0, i, a, nv;
     uint16_t present = 0, direct = 0;
 
+    if (debug_skip_draw())
+        return;
     attr_const_init();
 
     for (i = 0; i < s_gpu.idx_count; i++) {
@@ -3365,17 +3431,30 @@ static void raw_batch(void)
         fprintf(stderr, "[FTRACE] draw surf %08X clip %u,%u %ux%u zeta %08X xform %u vp %u prim %u"
                 " idx %u | z %u/%u/%u blend %u %X/%X cmask %08X cull %u | tex %08X %08X %08X %08X inl %d"
                 " | v0 %.1f %.1f %.4f %.3g  v1 %.1f %.1f  v2 %.1f %.1f"
-                " | d0 %08X a3 t%u s%u st%u @%08X | fin %08X/%08X aicw0 %08X f0 %08X bl %X %X/%X\n",
+                " | d0 %08X a3 t%u s%u st%u @%08X | fin %08X/%08X aicw0 %08X f0 %08X bl %X %X/%X"
+                " | tsp %08X oin %08X cc %08X | c0 %08X %08X %08X c1 %08X %08X %08X"
+                " | at %X %X %u sfmt %08X | fog en %u mode %X col %08X p %08X %08X | ctl0 %08X zmm %08X clip %g %g\n",
                 rb.color_va, s_gpu.clip_x, s_gpu.clip_y, s_gpu.clip_w, s_gpu.clip_h, rb.zeta_va,
                 rb.xform, rb.vp_start, rb.prim, rb.index_count,
                 r->depth_test_enable, r->depth_func, r->depth_write,
-                r->blend_enable, r->blend_src, r->blend_dst, r->color_mask, r->cull_enable,
+                s_reg[0x0304 / 4], s_reg[0x0344 / 4], s_reg[0x0348 / 4], s_reg[0x0358 / 4], r->cull_enable,
                 rb.tex_va[0], rb.tex_va[1], rb.tex_va[2], rb.tex_va[3], s_gpu.inline_active, q[0][0], q[0][1], q[0][2], q[0][3], q[1][0], q[1][1],
                 q[2][0], q[2][1],
                 s_gpu.idx_count ? vertex_color(s_gpu.idx[0]) : 0,
                 s_gpu.attr[3].type, s_gpu.attr[3].size, s_gpu.attr[3].stride, s_gpu.attr[3].offset,
                 s_reg[0x0288 / 4], s_reg[0x028C / 4], s_reg[0x0260 / 4], s_reg[0x0A60 / 4],
-                s_reg[0x0304 / 4], s_reg[0x0344 / 4], s_reg[0x0348 / 4]);
+                s_reg[0x0304 / 4], s_reg[0x0344 / 4], s_reg[0x0348 / 4],
+                /* texture shader program (5 bits per stage, PS_TEXTUREMODES),
+                 * other-stage input, combiner control (stage count) */
+                s_reg[0x1E70 / 4], s_reg[0x1E78 / 4], s_reg[0x1E60 / 4],
+                s_reg[0x0A60 / 4], s_reg[0x0A64 / 4], s_reg[0x0A68 / 4],
+                s_reg[0x0A80 / 4], s_reg[0x0A84 / 4], s_reg[0x0A88 / 4],
+                s_reg[0x0300 / 4], s_reg[0x033C / 4], s_reg[0x0340 / 4], s_reg[0x0208 / 4],
+                /* fog enable, mode, colour, params 0/1 */
+                s_reg[0x02A4 / 4], s_reg[0x029C / 4], s_reg[0x02A8 / 4],
+                s_reg[0x09C0 / 4], s_reg[0x09C4 / 4],
+                /* SET_CONTROL0 (w-buffer), SET_ZMIN_MAX_CONTROL */
+                s_reg[0x0290 / 4], s_reg[0x1D78 / 4], r->depth_min, r->depth_max);
     }
     s_backend->draw_raw(&rb);
     s_gpu.tris_drawn += s_gpu.idx_count / 3;
@@ -4441,6 +4520,7 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
                          ? (s_gpu.flip_write + 1) % s_gpu.flip_modulo
                          : s_gpu.flip_write + 1;
         s_gpu.flips++;
+        s_frame_draw_no = 0;
         /* Verbose runs: the ranked unhandled-method report every 600 flips,
          * so a run that is killed rather than exits still leaves one. */
         if (pb_verbose() && s_gpu.flips % 600 == 0)

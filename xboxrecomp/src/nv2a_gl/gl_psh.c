@@ -28,6 +28,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 typedef struct {
     char  *p;
@@ -414,5 +415,20 @@ int nv2a_gl_psh(const Nv2aPshKey *k, char *buf, size_t cap)
         "    else if (u_alpha_func == 0x206) pass = ar >= u_alpha_ref;\n"
         "    if (!pass) discard;\n"
         "}\n");
+    {
+        /* RECOMP_PSH_DUMP=1: every generated fragment shader with its key
+         * (combiner registers), to check a pass the renderer gets wrong. */
+        static int dump = -1;
+        if (dump < 0)
+            dump = getenv("RECOMP_PSH_DUMP") != NULL;
+        if (dump && !o.overflow) {
+            fprintf(stderr, "[PSH] control %08X final %08X/%08X program %08X other %08X\n",
+                    k->control, k->final0, k->final1, k->shader_program, k->other_input);
+            for (i = 0; i < count; i++)
+                fprintf(stderr, "[PSH]   stage %u: color icw %08X ocw %08X  alpha icw %08X ocw %08X\n",
+                        i, k->color_icw[i], k->color_ocw[i], k->alpha_icw[i], k->alpha_ocw[i]);
+            fprintf(stderr, "[PSH] ---\n%s[PSH] ===\n", buf);
+        }
+    }
     return o.overflow ? -1 : (int)(cap - o.left);
 }

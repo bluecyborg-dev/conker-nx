@@ -337,6 +337,12 @@ static uint32_t to_stored(uint32_t v, uint32_t p, uint32_t l)
 static VkSurf     s_surf[VK_MAX_SURF];
 static VkDepthBuf s_depth[VK_MAX_DEPTH];
 static VkSurf    *s_last;
+/* The last surface drawn to in this frame: the one a flip presents. A clear
+ * on its own does not make a surface the picture -- Conker composites its
+ * glow onto the back buffer and then clears its 256x256 glow target, and
+ * presenting the last surface touched showed that black square. */
+static VkSurf    *s_last_drawn;
+static uint32_t   s_last_drawn_frame;
 
 static int         s_in_render;
 static VkSurf     *s_rt;
@@ -562,6 +568,7 @@ static VkSurf *surf_get(uint32_t va, uint32_t w, uint32_t h, uint32_t aa_sx, uin
     if (s->image) {
         if (s_rt == s) end_rendering(), s_rt = NULL;
         if (s_last == s) s_last = NULL;
+        if (s_last_drawn == s) s_last_drawn = NULL;
         garbage_add(s->image, s->view, s->mem);
     }
     memset(s, 0, sizeof *s);
@@ -3191,6 +3198,8 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
     if (!s)
         return;
     s_drew_any = 1;
+    s_last_drawn = s;
+    s_last_drawn_frame = s_frame;
     psh_key(r, &pk);
     {
         uint32_t made = s_prog_made;
@@ -3912,7 +3921,7 @@ static void vk_flip(void)
 {
     static int dump_every = -1;
     static char dump_prefix[256];
-    VkSurf *s = s_last;
+    VkSurf *s = s_last_drawn && s_last_drawn_frame == s_frame ? s_last_drawn : s_last;
     uint32_t idx = 0;
     int have_image = 0;
     VkSubmitInfo si = { VK_STRUCTURE_TYPE_SUBMIT_INFO };

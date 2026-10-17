@@ -24,6 +24,11 @@
 | `RECOMP_PAD_SCRIPT=<ms>:<btn>[:<hold>],...` / `RECOMP_PAD_LIVE=<file>` | drive menus without hands; with dumps on, "look at the latest frame, append a press" |
 | `RECOMP_WATCHDOG_SECS=<s>` (+ `RECOMP_WATCHDOG_KEEP=1`) | guest call stack on a hang (`tools/stackwalk.py`) |
 | `RECOMP_FILE_TRACE=1` / `=2` | every `NtCreateFile` with path, access, disposition, options and result; `=2` adds the code addresses on the guest stack (callers) |
+| `RECOMP_SKIP_DRAWS=<lo>-<hi>` | drop draws lo..hi of every frame (counted from 0 after each flip) to bisect a wrong frame: skip a range, look at the dump, narrow it down |
+| `RECOMP_SKIP_BLEND=<src>/<dst>` (hex, e.g. `306/0`) / `RECOMP_SKIP_INLINE=1` | drop every draw with that blend pair / every inline-vertex draw |
+| `RECOMP_PSH_DUMP=1` | each new pixel-shader key (combiner stages, final combiner) and the GLSL generated for it |
+| `RECOMP_FRAME_TRACE` fields | per draw also: raw blend regs, texture-shader program, combiner control and factors, alpha test, surface format, fog (enable, mode, colour, params), `SET_CONTROL0` (bit 20 = w-buffer), `ZMIN_MAX_CONTROL`, clip range |
+| `tools/live_linux.sh start\|press\|frame\|log\|stop` | Linux bench in the background: append pad presses, grab the newest dumped frame |
 | `RECOMP_PB_EXEC=0` | no GPU: boot runs ~50× faster under the software path; follow it by file accesses |
 | `RECOMP_APU_TRACE`, `RECOMP_APU_VOICES`, `RECOMP_AUDIO_DUMP`, `RECOMP_APU_VOICE_DUMP` | audio (never judge audio from a traced run: the trace itself injects gaps) |
 | `RECOMP_NATIVE=0` / `RECOMP_NATIVE_CHECK=1` | disable / verify native replacements |
