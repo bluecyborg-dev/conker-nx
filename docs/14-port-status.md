@@ -14,8 +14,8 @@ intro's lost audio (pending a console run), Conker's magenta tail and the extra 
 issues first, then performance** (30 FPS, 60 if possible, low input lag).
 
 **Builds:** Linux bench `build/linux-vk/conker_recomp`. Newest Switch NRO
-`analysis/elf_archive/conker-vulkan_ba31654d.{nro,elf}` (commit d300139, all of the fixes below), not yet run
-on hardware. Run it twice: the first run fills the new shader/pipeline cache in
+`analysis/elf_archive/conker-vulkan_930c7b25.{nro,elf}` (commit 8231456: all of the fixes below, plus the
+depth-of-field and `fcmov`/`fxtract` changes), not yet run on hardware. Run it twice: the first run fills the new shader/pipeline cache in
 `sdmc:/switch/conker/`, the second shows the intro without the compile stall.
 
 **Last hardware run (2026-10-17, NRO `e807fd88`, log `run/net_logs/20261017-064742.log`):** the user played
