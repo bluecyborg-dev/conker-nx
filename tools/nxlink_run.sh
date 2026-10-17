@@ -46,5 +46,8 @@ addr=()
 extra=()
 [ -n "$ARGS" ] && extra=(--args "$ARGS")
 echo "sending $(basename "$NRO") ($(($(wc -c < "$NRO") / 1048576)) MB)${IP:+ to $IP}; log: $LOG"
-"$NXLINK" ${addr[@]+"${addr[@]}"} -r 30 -s -p switch/conker/conker-vulkan.nro ${extra[@]+"${extra[@]}"} "$NRO" 2>&1 | tee "$LOG"
+# Under `script` nxlink writes to a pseudo-terminal: into a pipe its stdio is
+# block-buffered and the log arrived here in 32 KB chunks (2026-10-16 run).
+# script also writes the transcript to $LOG.
+script -q "$LOG" "$NXLINK" ${addr[@]+"${addr[@]}"} -r 30 -s -p switch/conker/conker-vulkan.nro ${extra[@]+"${extra[@]}"} "$NRO"
 echo "connection closed; $(wc -l < "$LOG" | tr -d ' ') lines in $LOG"
