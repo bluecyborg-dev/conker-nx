@@ -66,5 +66,137 @@
  {
   "start": "0x00359FF0",
   "note": "Tail-jump target of 0x00359E00; starts right after sub_00359F80's ret at 0x00359FEF; relocates the pointers of a loaded block by edx."
+ },
+ {
+  "start": "0x0014FE60",
+  "note": "Runtime ICALL target in the single-player opening cutscene (2026-10-17); starts right after sub_0014FE40 ends with an indirect jmp [eax*4 + 0x597C58], so the static pass merged it into that function. Unresolved, it left a float (-240.0) in a caller's stack slot and sub_000D9950 crashed on 0xC3700014."
+ },
+ {
+  "start": "0x00014136",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): SEH filter/handler block referenced from the scope table at 0x0064D018; follows `ret`; starts `mov eax, dword ptr [ebp - 0x18]`."
+ },
+ {
+  "start": "0x00019806",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): SEH filter/handler block referenced from the scope table at 0x0064CEF4; follows `ret`; starts `mov eax, dword ptr [ebp - 0x18]`."
+ },
+ {
+  "start": "0x0002B55F",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): SEH filter/handler block referenced from the scope table at 0x0064CE54; follows `ret 0x14`; starts `mov eax, dword ptr [ebp - 0x14]`."
+ },
+ {
+  "start": "0x00085D18",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): SEH filter/handler block referenced from the scope table at 0x0064C2E0; follows `ret`; starts `mov esi, dword ptr [ebp - 0x14]`."
+ },
+ {
+  "start": "0x000CF610",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): referenced by pointer from 0x00597A6C; follows `jmp 0xdae40`; starts `sub esp, 0x30`."
+ },
+ {
+  "start": "0x000D70B0",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): referenced by pointer from 0x00597B24; follows `ret`; starts `movss xmm1, dword ptr [0x649724]`."
+ },
+ {
+  "start": "0x001350E0",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): referenced by pointer from 0x00747D58; follows `ret`; starts `mov eax, dword ptr [0x847024]`."
+ },
+ {
+  "start": "0x001371C0",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): referenced by pointer from 0x00747D7C; follows `int3`; starts `sub esp, 0xc`."
+ },
+ {
+  "start": "0x00145060",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): referenced by pointer from 0x0058E8FC; follows `ret`; starts `mov eax, dword ptr [0x8470dc]`."
+ },
+ {
+  "start": "0x00153340",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): referenced by pointer from 0x005915F8; follows `ret`; starts `mov eax, dword ptr [0x6b826c]`."
+ },
+ {
+  "start": "0x001664E0",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): referenced by pointer from 0x00595ABC; follows `ret`; starts `mov ecx, dword ptr [esp + 4]`."
+ },
+ {
+  "start": "0x00167530",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): referenced by pointer from 0x006B7614; follows `ret`; starts `mov eax, dword ptr [0x7fa20c]`."
+ },
+ {
+  "start": "0x00180CB0",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): referenced by pointer from 0x006B7744; follows `ret`; starts `mov ecx, dword ptr [esp + 4]`."
+ },
+ {
+  "start": "0x00233432",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): SEH filter/handler block referenced from the scope table at 0x0064EF3C; follows `ret`; starts `mov edi, dword ptr [ebp - 0x14]`."
+ },
+ {
+  "start": "0x0023C7A0",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): referenced by pointer from 0x0023D263; follows `ret`; starts `push ecx`."
+ },
+ {
+  "start": "0x002473C8",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): SEH filter/handler block referenced from the scope table at 0x0064C9C0; follows `ret`; starts `mov esi, dword ptr [ebp - 0x14]`."
+ },
+ {
+  "start": "0x00250322",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): SEH filter/handler block referenced from the scope table at 0x0064BFF8; follows `ret`; starts `mov esi, dword ptr [ebp - 0x14]`."
+ },
+ {
+  "start": "0x00253EBE",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): SEH filter/handler block referenced from the scope table at 0x0064C8D0; follows `ret`; starts `mov eax, dword ptr [ebp - 0x14]`."
+ },
+ {
+  "start": "0x00254E34",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): SEH filter/handler block referenced from the scope table at 0x0064C560; follows `ret`; starts `mov esi, dword ptr [ebp - 0x14]`."
+ },
+ {
+  "start": "0x00254F58",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): SEH filter/handler block referenced from the scope table at 0x0064C510; follows `ret`; starts `mov esi, dword ptr [ebp - 0x14]`."
+ },
+ {
+  "start": "0x0027BC10",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): referenced by pointer from 0x00600978; follows `ret`; starts `push ecx`."
+ },
+ {
+  "start": "0x00293213",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): SEH filter/handler block referenced from the scope table at 0x0064D74C; follows `ret`; starts `mov eax, dword ptr [ebp - 0x14]`."
+ },
+ {
+  "start": "0x0029D0D0",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): referenced by pointer from 0x00590E18; follows `ret`; starts `mov eax, dword ptr [0x6b826c]`."
+ },
+ {
+  "start": "0x002AE9B5",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): referenced by pointer from 0x0064BA40; follows `ret`; starts `push 0`."
+ },
+ {
+  "start": "0x003444D6",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): SEH filter/handler block referenced from the scope table at 0x0064D158; follows `ret`; starts `mov eax, dword ptr [ebp - 0x18]`."
+ },
+ {
+  "start": "0x0034581D",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): SEH filter/handler block referenced from the scope table at 0x0064D2BC; follows `ret 0x14`; starts `mov eax, dword ptr [ebp - 0x14]`."
+ },
+ {
+  "start": "0x00353DF5",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): referenced by pointer from 0x0064B9F0; follows `ret`; starts `push 0`."
+ },
+ {
+  "start": "0x00397CEB",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): SEH filter/handler block referenced from the scope table at 0x0064CB00; follows `ret`; starts `mov eax, dword ptr [ebp - 0x14]`."
+ },
+ {
+  "start": "0x00397F56",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): referenced by pointer from 0x0064EE18; follows `ret 8`; starts `mov eax, dword ptr [ebp + 8]`."
+ },
+ {
+  "start": "0x0048CF1B",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): referenced by pointer from 0x0048C3E2; follows `jmp 0xa4e40`; starts `mov ecx, 0x75f780`."
+ },
+ {
+  "start": "0x0048CF25",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): referenced by pointer from 0x0048C3F8; follows `jmp 0x46e39e`; starts ``."
+ },
+ {
+  "start": "0x0048CF2F",
+  "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): referenced by pointer from 0x0048C404; follows `jmp 0x46e39e`; starts ``."
  }
 ]

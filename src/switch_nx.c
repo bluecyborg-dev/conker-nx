@@ -352,6 +352,20 @@ static void *log_flusher(void *arg)
     return NULL;
 }
 
+/* Over nxlink the log goes to the socket and log_open() never runs, so its
+ * flusher -- which also prints [perf] every 10 s -- does not either. */
+static void *perf_reporter(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        svcSleepThread(10000000000ull);
+        if (s_log_off)
+            break;
+        perf_report();
+    }
+    return NULL;
+}
+
 static int log_open(void)
 {
     s_log_buf = (char *)malloc(LOG_CAP);
@@ -804,11 +818,58 @@ static u32 prof_off(u64 a)
     return a >= b && a - b < 0xFFFFFFFFull ? (u32)(a - b) : 0xFFFFFFFFu;
 }
 
+static int prof_key_cmp(const void *a, const void *b)
+{
+    u64 x = *(const u64 *)a, y = *(const u64 *)b;
+    return x < y ? -1 : x > y;
+}
+
+/* The window's samples as text in the log, so a Wi-Fi run needs no trip to
+ * the SD card for prof.bin: per busy thread slot, the sample count and the
+ * hottest 128-byte code granules ("[profile] slot S n N: off:count ...",
+ * offsets into the NRO). tools/prof_log_report.py resolves them against the
+ * ELF and sums them per function. */
+#define PROF_TOP 40
+static void prof_summary(void)
+{
+    static u64 keys[PROF_MAX];
+    struct { u32 g, c; } top[PROF_TOP];
+    unsigned i = 0, n = s_prof_n, k;
+    for (k = 0; k < n; k++)
+        keys[k] = ((u64)s_prof[k].slot << 32) | (s_prof[k].pc & ~127u);
+    qsort(keys, n, sizeof keys[0], prof_key_cmp);
+    while (i < n) {
+        unsigned slot = (unsigned)(keys[i] >> 32), j = i, nt = 0, t;
+        char line[PROF_TOP * 16 + 64];
+        int len;
+        while (j < n && (unsigned)(keys[j] >> 32) == slot) {
+            unsigned e = j, c;
+            while (e < n && keys[e] == keys[j])
+                e++;
+            c = e - j;
+            for (t = nt < PROF_TOP ? nt++ : PROF_TOP; t > 0 && top[t - 1].c < c; t--)
+                if (t < PROF_TOP)
+                    top[t] = top[t - 1];
+            if (t < PROF_TOP) {
+                top[t].g = (u32)keys[j];
+                top[t].c = c;
+            }
+            j = e;
+        }
+        len = snprintf(line, sizeof line, "[profile] slot %u n %u:", slot, j - i);
+        for (t = 0; t < nt && len < (int)sizeof line - 16; t++)
+            len += snprintf(line + len, sizeof line - len, " %x:%u", top[t].g, top[t].c);
+        fprintf(stderr, "%s\n", line);
+        i = j;
+    }
+}
+
 static void prof_flush(void)
 {
     FILE *f;
     if (!s_prof_n)
         return;
+    prof_summary();
     f = fopen("sdmc:/switch/conker/prof.bin", "ab");
     if (f) {
         fwrite(s_prof, sizeof s_prof[0], s_prof_n, f);
@@ -1166,6 +1227,11 @@ void switch_boot(void)
     s_nxlink = nxlinkStdio();
     if (s_nxlink < 0 && !log_open())
         fprintf(stderr, "[switch] log device unavailable\n");
+    if (s_nxlink >= 0) {
+        pthread_t t;
+        if (pthread_create(&t, NULL, perf_reporter, NULL) == 0)
+            pthread_detach(t);
+    }
     load_env();
     s_log_sync = getenv("CONKER_LOG_SYNC") && strcmp(getenv("CONKER_LOG_SYNC"), "1") == 0;
     {
