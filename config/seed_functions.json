@@ -22,5 +22,41 @@
  {
   "start": "0x0055F59A",
   "note": "XPP: starts right after the previous function's ret with no padding and is only reached through a pointer table; found by scanning XPP.asm for code after an end of function (2026-10-16). [ICALL] Failed to resolve on the third Linux run."
+ },
+ {
+  "start": "0x003FA4F0",
+  "note": "Function starts after INT3 padding following sub_003FA320; called through the function pointer stored at 0x00480651. [ICALL] Failed to resolve during the conker-dev cache-path run."
+ },
+ {
+  "start": "0x00016620",
+  "note": "Function starts after INT3 padding at the end of sub_000165C0; referenced by the immediate at 0x000162C0 and called 56,000+ times during startup."
+ },
+ {
+  "start": "0x0002D710",
+  "note": "Function begins after INT3 padding at 0x0002D70C-0x0002D70F; valid stack-frame prologue and first runtime call target during the container crash."
+ },
+ {
+  "start": "0x00123600",
+  "note": "Runtime ICALL target; begins with a valid instruction sequence after the switch table at the end of sub_00123290 and runs to the next detected function at 0x00123A10."
+ },
+ {
+  "start": "0x00248670",
+  "note": "Runtime ICALL target; function starts after eight INT3 padding bytes at 0x00248668-0x0024866F, with a valid stack-frame prologue."
+ },
+ {
+  "start": "0x00499849",
+  "note": "Runtime ICALL target in XNET; begins with valid switch-dispatch code immediately after the preceding function's ret at 0x00499848."
+ },
+ {
+  "start": "0x001C1400",
+  "note": "Runtime ICALL target; begins immediately after sub_001C13F0's ret at 0x001C13FF, with a valid object-loop body."
+ },
+ {
+  "start": "0x001C16A0",
+  "note": "Runtime ICALL target; begins with a valid stack allocation after a five-entry switch table ending at 0x001C16A0."
+ },
+ {
+  "start": "0x001AF3C0",
+  "note": "Runtime ICALL target; begins with a valid global-state routine immediately after sub_001AF340's ret at 0x001AF3BF."
  }
 ]

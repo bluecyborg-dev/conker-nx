@@ -860,6 +860,35 @@ static ssize_t host_write(int fd, const void *buf, size_t len)
 #define host_write write
 #endif
 
+/* NtCreateFile with FILE_DIRECTORY_FILE and OPEN_IF is how the game creates
+ * cache directories. Conker requests nested paths such as
+ * Z:\\texture\\frontend\\tips on a fresh cache volume. mkdir() on the leaf
+ * alone fails when its parents are absent, so build the directory chain the
+ * same way the save-root setup does. */
+static int mkdir_tree(const char *path, mode_t mode)
+{
+    char copy[MAX_PATH];
+    size_t len, i;
+
+    if (!path || !(len = strlen(path)) || len >= sizeof(copy)) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    memcpy(copy, path, len + 1);
+
+    for (i = 1; i < len; i++) {
+        if (copy[i] != '/')
+            continue;
+        copy[i] = '\0';
+        if (mkdir(copy, mode) < 0 && errno != EEXIST)
+            return -1;
+        copy[i] = '/';
+    }
+    if (mkdir(copy, mode) < 0 && errno != EEXIST)
+        return -1;
+    return 0;
+}
+
 /* fstat, or stat of the handle's path for a directory handle. */
 static int handle_stat(HANDLE h, int fd, struct stat *st)
 {
@@ -891,7 +920,7 @@ NTSTATUS __stdcall xbox_NtCreateFile(
     int fd;
     if (CreateOptions & XBOX_FILE_DIRECTORY_FILE) {
         if (CreateDisposition == XBOX_FILE_CREATE || CreateDisposition == XBOX_FILE_OPEN_IF)
-            mkdir(host_path, 0755);   /* EEXIST is fine */
+            mkdir_tree(host_path, 0755);   /* EEXIST is fine */
 #if defined(__SWITCH__)
         /* Horizon's filesystem layer cannot open() a directory. A
          * directory handle only needs its path (enumeration uses opendir on

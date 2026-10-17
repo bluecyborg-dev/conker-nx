@@ -1520,6 +1520,12 @@ static int             s_nx_first_reserve = 1;
 enum { NX_UNKNOWN, NX_SHARED, NX_PHYSICAL };
 static int s_nx_mode = NX_UNKNOWN;
 
+/* Shared-memory objects can back small one-off commits even on hosts where
+ * the much larger Xbox RAM mapping does not fit in Horizon's shared-memory
+ * budget. Keep this fallback narrow: the 64 MB guest RAM still uses code
+ * memory, while small extended-VMA allocations can use a distinct mapping. */
+#define NX_SMALL_SHM_FALLBACK_MAX (128u * 1024u)
+
 static void nx_probe(void)
 {
     Handle h;
@@ -1588,6 +1594,33 @@ static int nx_commit(uintptr_t a, size_t len)
                     len / 1024, (void *)a, rc);
             if (shm) svcCloseHandle(shm);
             free(src);
+
+            /* Horizon may reject a code-memory owner view at an extended
+             * guest VA even though a small shared-memory view can map there.
+             * Such a view has no aliasing requirement, so it is safe to use
+             * only for these small standalone commits. */
+            if (len <= NX_SMALL_SHM_FALLBACK_MAX) {
+                Handle fallback = 0;
+                Result fallback_rc = svcCreateSharedMemory(&fallback, len,
+                                                            Perm_Rw, Perm_R);
+                if (R_SUCCEEDED(fallback_rc)) {
+                    fallback_rc = svcMapSharedMemory(fallback, (void *)a, len,
+                                                     Perm_Rw);
+                    if (R_SUCCEEDED(fallback_rc)) {
+                        r = nx_add(a, len, fallback, 1, 0);
+                        if (r) {
+                            fprintf(stderr, "  [NX] small commit at %p uses shared memory\n",
+                                    (void *)a);
+                            return 1;
+                        }
+                        svcUnmapSharedMemory(fallback, (void *)a, len);
+                        fallback_rc = 0xFFFFFFFFu;
+                    }
+                    svcCloseHandle(fallback);
+                }
+                fprintf(stderr, "  [NX] small shared-memory fallback at %p failed: 0x%X\n",
+                        (void *)a, fallback_rc);
+            }
             return 0;
         }
         memset((void *)a, 0, len);
