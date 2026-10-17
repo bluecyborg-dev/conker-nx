@@ -105,6 +105,14 @@ extern uint8_t *g_apu_ram_ptr; /* Set at init: host address of guest VA 0 */
 extern int xbox_ContiguousIsPhysical(uint32_t phys);
 static inline uint8_t *apu_phys(hwaddr addr) {
     uint32_t p = (uint32_t)addr & 0x03FFFFFF;
+    /* No Xbox has physical memory at or above 128 MB, so a "physical"
+     * address there is a VA MmGetPhysicalAddress passed through: memory the
+     * title allocated above RAM (NtAllocateVirtualMemory, the extended-VMA
+     * range at 0x74000000). Masking it played whatever low memory shared its
+     * low bits -- Conker's streamed sounds at 0x7415D7A0 came out as the code
+     * at 0x0015D7A0, i.e. full-scale static. */
+    if ((uint32_t)addr >= 0x08000000u && (uint32_t)addr < 0x80000000u)
+        return g_apu_ram_ptr + (uint32_t)addr;
     if ((uint32_t)addr & 0x04000000u)       /* XBOX_PHYS_LOWVA_TAG: low RAM */
         return g_apu_ram_ptr + p;
     return g_apu_ram_ptr + (xbox_ContiguousIsPhysical(p) ? 0x80000000u + p : p);
