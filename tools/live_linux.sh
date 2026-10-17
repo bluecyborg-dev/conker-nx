@@ -41,7 +41,9 @@ press)
     for p in "$@"; do echo "$p" >> "$LIVE/pad.cmd"; done
     ;;
 frame)
-    f=$(ls -t "$LIVE"/d/f*.bmp 2>/dev/null | grep -v fxaa | head -1)
+    # sed reads to the end: head would close the pipe early and, with many
+    # dumps, ls dies of SIGPIPE (exit 141 under pipefail).
+    f=$(ls -t "$LIVE"/d/f*.bmp 2>/dev/null | grep -v fxaa | sed -n 1p)
     [ -n "$f" ] || { echo "no frame yet" >&2; exit 1; }
     out="${2:-$LIVE/latest.png}"
     sips -s format png "$f" --out "$out" >/dev/null

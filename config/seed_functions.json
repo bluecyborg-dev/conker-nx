@@ -58,5 +58,13 @@
  {
   "start": "0x001AF3C0",
   "note": "Runtime ICALL target; begins with a valid global-state routine immediately after sub_001AF340's ret at 0x001AF3BF."
+ },
+ {
+  "start": "0x00359E00",
+  "note": "Runtime ICALL target while loading the Beach Dead multiplayer level (Dumbots, 2026-10-17); after a jump table and int3 padding at 0x00359DFB; stores its second argument at [0x84B264] and jumps to 0x00359FF0."
+ },
+ {
+  "start": "0x00359FF0",
+  "note": "Tail-jump target of 0x00359E00; starts right after sub_00359F80's ret at 0x00359FEF; relocates the pointers of a loaded block by edx."
  }
 ]
