@@ -198,5 +198,9 @@
  {
   "start": "0x0048CF2F",
   "note": "Static scan for entries hidden after a ret/jmp (2026-10-17): referenced by pointer from 0x0048C404; follows `jmp 0x46e39e`; starts ``."
+ },
+ {
+  "start": "0x0019D3C0",
+  "note": "Runtime ICALL target in the Beach Dead multiplayer level (2026-10-17), then a crash; starts right after the jump table that ends sub_0019CE40 (last entry 0x0019CE92 at 0x0019D3BC), referenced from .rdata 0x0058EE78. Found by tools/hidden_entries once it accepted entries after jump tables."
  }
 ]

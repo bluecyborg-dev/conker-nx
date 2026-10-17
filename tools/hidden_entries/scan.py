@@ -81,7 +81,16 @@ for fl, va, vs, ra, rs in secs[:1]:            # .text
         if b in (b'\xcc', b'\x90', b'\x00', None): continue
         # must decode as code and be preceded by ret/jmp/int3/padding or a function end
         prev_end = text_ranges[i][1] if i >= 0 else 0
-        if v - prev_end > 64: continue
+        prev_lo = text_ranges[i][0] if i >= 0 else 0
+        if v - prev_end > 64:
+            # Further out only straight after padding or after a jump table
+            # (a dword pointing back into the previous function): the
+            # function before ended with a switch whose table sits in .text.
+            b1 = raw(v - 1, 1)
+            tail = rd32(v - 4)
+            if not (b1 in (b'\xcc', b'\x90')
+                    or (tail is not None and prev_lo <= tail < prev_end)):
+                continue
         cands.append((v, 'gap after 0x%08X' % prev_end, r))
 for a, fs, r in sorted(set(cands)):
     print('0x%08X inside %s, referenced from 0x%08X' % (a, fs, r))

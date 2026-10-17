@@ -26,4 +26,9 @@ for line in open(sys.argv[3]):
     prevtxt = '%s %s' % (prev.mnemonic, prev.op_str) if prev and prev.address + prev.size == v else 'MISALIGNED'
     first = ['%s %s' % (i.mnemonic, i.op_str) for i in list(md.disasm(raw(v, 24) or b'', v))[:3]]
     ok = (not same_fn) and (prevtxt.split()[0] in ('ret', 'jmp', 'int3', 'nop') if prevtxt != 'MISALIGNED' else False)
+    # After a jump table: the dword before v points back into the function
+    # that precedes it (its switch table sits in .text).
+    tb = raw(v - 4, 4)
+    if not ok and not same_fn and tb and lo <= struct.unpack('<I', tb)[0] < max(hi, v):
+        ok, prevtxt = True, 'jump table entry 0x%08X' % struct.unpack('<I', tb)[0]
     print('%s 0x%08X ref 0x%08X%s | prev: %-28s | %s' % ('OK ' if ok else '-- ', v, ref, ' (same fn)' if same_fn else '', prevtxt[:28], ' ; '.join(first)))
