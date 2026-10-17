@@ -7,15 +7,15 @@ is reached; the full history of how each one was found stays in [09-bringup-log.
 When a big milestone is reached, copy this file into the guide
 (`nx-port-guide/platforms/xbox/conker/`).
 
-**Last milestone (2026-10-17):** **the front end renders and plays on the Linux bench.** The black title
-scene was a translator bug, not a renderer one: `fincstp` was emitted as a no-op, which broke the game's
-rotation-matrix builder and collapsed the camera (commit 1bc623e). The title tavern draws; Start, profile
-creation (saved to `UDATA`), the Xbox Live & Co menu, Dumbots → Solo → Beach Dead → team, class and lobby
-all work with pad input. Loading the level then stopped on an unresolved call, now seeded (see below).
+**Last milestone (2026-10-17):** **the single-player campaign plays on the Linux bench.** New game →
+the opening cutscenes (throne room, Berri's house, the bar, the Panther King) → the training level, where
+the stick moves Conker. No unresolved calls or crashes on the way after 35 more seeds (commit 66ef96c). The
+black title scene before it was the lifter's `fincstp` (commit 1bc623e). Conker himself draws as a purple
+blob (see issues). **Next focus: performance on the console** (30 FPS, 60 if possible, low input lag).
 
 **Builds:** Linux bench `build/linux-vk/conker_recomp`. Newest Switch NRO
-`analysis/elf_archive/conker-vulkan_5c8b2369.{nro,elf}` (commit 1bc623e: the `fincstp` fix; built before the
-two level-load seeds), not yet run on hardware (the upload found the NetLoader closed).
+`analysis/elf_archive/conker-vulkan_e807fd88.{nro,elf}` (commit 66ef96c: `fincstp`, 37 new seeds, in-log
+profiler summary, `[perf]` over nxlink), not yet run on hardware.
 
 **Last hardware run (2026-10-17, NRO `3f85b158`, log `run/net_logs/20261017-020541.log`):** boots, plays
 the intro, intro skipped with a button press, then a **black screen with the menu music playing**. The front
@@ -36,14 +36,15 @@ current evidence does not establish that they share the same specific depth/clip
 | 2026-10-17 | Title-screen 3D flythrough partly draws (shadow maps cleared white, right surface presented) | Linux |
 | 2026-10-17 | Front end runs on the console with its music and no memory errors (picture still black) | Switch |
 | 2026-10-17 | **Front end renders and is playable**: title tavern, profile created and saved, Dumbots level/team/class select and lobby | Linux |
+| 2026-10-17 | **Single-player campaign plays**: new game, the full opening, control in the training level | Linux |
 
 **Priority (2026-10-17):** get to a visible, playable game scene as soon as possible. The Linux bench may use
 a different resolution or aspect ratio from the Switch; exact aspect-ratio matching can wait. The current
 640×480 back-buffer capture shows geometry projected far outside the view, so aspect ratio alone does not
 explain the black screen.
 
-Next milestones: first gameplay frame on Linux (Dumbots Beach Dead, then the single-player campaign); the
-front end on the console with the `fincstp` fix; first gameplay frame on the console.
+Next milestones: gameplay on the console; 30 FPS in the training level on the console; then 60 FPS and
+input latency.
 
 ## Known issues
 
@@ -76,12 +77,14 @@ and say how.
   - Fix (done 2026-10-17, commit 1bc623e): `fincstp`/`fdecstp` move `g_fp_top` (`lifter.py`, test in
     `test_lifter_fpu.py`). The title tavern renders. How it was found, step by step: 2026-10-17 entries in
     [09-bringup-log.md](09-bringup-log.md) and [15-black-screen-investigation-summary.md](15-black-screen-investigation-summary.md).
-- [ ] **Level load stops on an unresolved call** (Linux, Dumbots → Beach Dead, 2026-10-17).
-  - Culprit: `[ICALL] Failed to resolve VA 0x00359E00`, then a null function pointer; the pushbuffer stopped.
-    `0x00359E00` follows a jump table and `int3` padding and tail-jumps to `0x00359FF0`, which starts right
-    after `sub_00359F80`'s `ret`. Neither was found by the static pass.
-  - Fix: both seeded in `config/seed_functions.json`; full regen done (21,284 of 21,286 functions). Rebuild,
-    load Beach Dead again, tick when the level plays.
+- [ ] **Level loads and cutscenes stop on unresolved calls** (Linux, 2026-10-17): Beach Dead (`0x00359E00`),
+  the opening cutscene (`0x0014FE60` crashed it, `0x00153340`). All seeded, plus 32 more from a static scan
+  (`tools/hidden_entries`); the campaign then ran from the opening to the training level clean. Beach Dead
+  not retried yet. Tick once a few more levels load without `[ICALL]`.
+- [ ] **Conker draws as a purple blob** (training level, Linux).
+  - Culprit: probably his fur, which uses NV2A texture-shader modes the renderer does not implement (next
+    item), or a texture format it decodes wrongly. The other characters and the level look right.
+  - Fix: frame-trace a gameplay frame and look at Conker's draws (texture-shader program, formats).
 - [ ] **Other x87 instructions the lifter leaves as comments** (`/* FPU: ... */` in `gen/`).
   - Culprit: no translation for `fcmovnbe` (2 sites, `sub_00458494`), `ficom`/`ficomp` (`sub_0018DEC2`, looks
     like data decoded as code), `fxtract` (`sub_00459020`), `fnsave`/`frstor` (`sub_004716D8`); `fbld` and

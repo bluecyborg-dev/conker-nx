@@ -356,3 +356,33 @@ Other x87 instructions still emitted as `/* FPU: ... */`: `fcmovnbe` ×2 (`sub_0
 Lesson: a black or empty 3D view with every back end agreeing is a CPU-side bug until proven otherwise.
 Checking the model-view matrices for orthogonality would have pointed at the game's math a day earlier
 than the depth/clip probes did.
+
+## 2026-10-17: single-player campaign to the training level (Linux); hidden function entries
+
+With the `fincstp` fix the title tavern is the menu: left/right pans between "Xbox Live & Co" and the save
+slots ("Game 3" → New Game / Play, Erase). New game plays the opening in the engine: "A Rare Game / starring
+Conker and Berri", King Conker on the throne, the Bad Fur Day logo, Berri's house and phone, the bar, the
+castle at night, the Panther King; then `Level\TrainingLevel` loads and the stick moves Conker. The game
+saved Game 3 on its own. Conker himself draws as a purple blob; the level and other characters look right.
+
+Unresolved calls on the way, each a real function the static pass missed:
+
+| Address | Where it bit | Why it was missed |
+|---|---|---|
+| `0x00359E00` → `0x00359FF0` | Dumbots level load (Beach Dead): `[ICALL]`, then a null function pointer, pushbuffer stopped | after a jump table and `int3` padding; its tail-jump target starts right after a `ret` |
+| `0x0014FE60` | opening cutscene: crash in `sub_000D9950` reading `0xC3700014` | right after `sub_0014FE40`'s final `jmp [eax*4 + 0x597C58]`, so merged into it. Unresolved, its caller's stack slot kept a float (`0xC3700000` = −240.0) where a record pointer belonged |
+| `0x00153340` | opening cutscene, later | right after a `ret`, referenced from a vtable in `.rdata` |
+
+Rather than one regen per run, a static scan (`tools/hidden_entries`) lists every address referenced from
+data or code that sits after a `ret`/`jmp` inside a known function or in a gap between functions, and vets
+each one (referenced from outside its function, preceded by `ret`/`jmp`/`int3`/`nop`). 51 candidates, 32
+accepted: 15 functions reached through vtables, tables or code immediates (including three D3DX
+`this`-adjust thunks) and 17 SEH filter/handler blocks referenced from scope tables. Note for scanners: this
+XBE sets the executable flag (`0x4`) on `.rdata` and `.data`, so section flags cannot separate code from
+data; use the section names. Regen: 21,320 functions. After it the campaign ran from the opening to the
+training level with no `[ICALL]`.
+
+Console tooling for the performance work: the sampling profiler now also prints its 10 s window into the log
+(`[profile]` lines, hottest 128-byte code granules per thread; `tools/prof_log_report.py LOG ELF` sums them
+per function), and the 10 s `[perf]` report now runs under nxlink too (it only ran when logging to a file, so
+no Wi-Fi run had it). NRO `e807fd88`.
