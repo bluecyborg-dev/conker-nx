@@ -6,6 +6,13 @@
   bugs, frame dumps, gdb. Use `RECOMP_NO_MIRRORS=1` so Horizon's no-alias behaviour shows up there too.
   Under gdb: `set disable-randomization off` (with ASLR off the Xbox kernel VA and tiled aperture cannot be
   mapped).
+- **Unattended sessions** (how Claude tests while the user is away): `tools/live_linux.sh` runs the game
+  detached with live pad input and pruned frame dumps; `tools/to_training.sh [EXTRA]` drives it to the
+  training level by waiting on log markers (a frame over 300 draws, then the level's text bank in a
+  `[PATH]` line), not on time; `tools/contact_sheet.py OUT.png FRAMES...` turns a run's dumps into one image
+  to review. Console uploads retry `tools/nxlink_run.sh` every 10 s until the NetLoader is open; without
+  anyone watching, `nxlink` without `-s`. Full walk-through: the guide's
+  `platforms/xbox/conker/build-process.md` ("How Claude runs a test session").
 - **Eden** runs the GL NRO only (no NVK). Good for boot time and hitches, not for fps. Close it politely
   (a hard kill corrupted its exe/config once).
 - **Hardware** for Vulkan and anything about speed, unaligned atomics, IPC, memory aliasing.
