@@ -94,6 +94,9 @@ ports).
   5 return addresses, 10 ms timestamp) into `prof.bin`; `tools/prof_report.py prof.bin <elf> <log> [--top N]
   [--time A-B]`. Thread entries are absolute: subtract the NRO base (`&_start`). Timestamps wrap every 655 s
   (the script unwraps). Without frame pointers, trust `pc` more than deep stacks (BO1 found the same).
+  `tools/prof_log_report.py` percentages describe the composition of sampled PCs, not CPU utilization; use
+  `[perf] % of a core per thread` for per-thread CPU time. A waiting thread can still be sampled inside a sleep
+  or signal call when it passed the profiler's busy-thread threshold earlier in the window.
 - Report the frame-time distribution, not just fps: share of frames > 33/50/100 ms, worst. Frames show in
   16.67 ms steps; a fixed swap interval removes cadence jitter once ~90 % of frames fit it.
 - Displayed fps from a capture: `ffmpeg -i clip.mp4 -vf "mpdecimate=hi=200:lo=64:frac=0.1,showinfo" -f null -`

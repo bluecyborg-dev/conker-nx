@@ -92,6 +92,9 @@ static uint32_t s_depth_trace_first, s_depth_trace_last;
 static int s_depth_trace;
 #define VT(...) do { if (s_vtrace > 0) { fprintf(stderr, "  [VKT] " __VA_ARGS__); fflush(stderr); } } while (0)
 static uint32_t s_frame;
+/* Set when this frame samples Conker's 640x480 linear XMV image. The movie
+ * carries its native 4:3 aspect even when the game presents gameplay wide. */
+static int s_frame_has_4x3_movie;
 /* RECOMP_TEX_CHANGES=1: log every cached texture whose guest bytes changed
  * (re-uploaded). Finds textures a title frees while still drawing them. */
 static int s_tex_changes = -1;
@@ -1143,6 +1146,9 @@ static VkImageView tex_get(uint32_t va, uint32_t color, uint32_t w, uint32_t h, 
     uint32_t i, hash;
     VkFormat fmt = VK_FORMAT_B8G8R8A8_UNORM;
     uint32_t layers = face ? 6 : 1, f, size;
+
+    if ((color == 0x24 || color == 0x25) && w == 640 && h == 480 && pitch == 640 * 2)
+        s_frame_has_4x3_movie = 1;
 
     for (i = s_tex_head[tex_bucket(va, color, w, h)]; i; i = s_tex_next[i - 1]) {
         VkTex *c = &s_tex[i - 1];
@@ -3310,6 +3316,11 @@ static struct {
 } s_pend;
 static int s_inst_on = -1, s_inst_alt;
 static uint32_t s_st_draws, s_st_calls, s_st_inst;
+static int s_vp_const_cache_on = -1;
+static uint32_t s_vp_const_cache_gen, s_vp_const_cache_cb_gen;
+static VkDeviceSize s_vp_const_cache_at;
+static int s_vp_const_cache_valid;
+static uint32_t s_vp_const_cache_hits, s_vp_const_cache_copies;
 
 static void pend_flush(void)
 {
@@ -3457,6 +3468,12 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
             s_inst_alt = 1;                     /* debug: every other frame */
         fprintf(stderr, "  [VK] instancing %s (uniform range %u, alignment %u)\n",
                 s_inst_on ? "on" : "off", s_ubo_range, (unsigned)s_ubo_align);
+    }
+    if (s_vp_const_cache_on < 0) {
+        const char *e = getenv("RECOMP_VK_CONST_CACHE");
+        s_vp_const_cache_on = !(e && *e == '0');
+        fprintf(stderr, "  [VK] vertex-constant block cache %s\n",
+                s_vp_const_cache_on ? "on" : "off");
     }
     s_st_draws++;
     {
@@ -3623,10 +3640,30 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
         }
     }
     {
-        /* Constants last: repeats append theirs right behind (pend_append). */
-        VkDeviceSize cat = ring_alloc(VK_CONST_SIZE, s_ubo_align, &map), range;
-        if (!map) return;
-        memcpy(map, b->vp_consts, VK_CONST_SIZE);
+        /* Constants last: repeats append theirs right behind (pend_append).
+         * Other draws can share an unchanged constant generation, so reuse
+         * its frame-ring block instead of copying 192 vectors again. Keep a
+         * fresh block for draws eligible for instancing: their next instance
+         * must append constants contiguously after this draw. The generation
+         * is incremented by every guest write to the transform constants. */
+        int can_reuse = s_vp_const_cache_on && !pend_eligible(b)
+                     && s_vp_const_cache_valid
+                     && s_vp_const_cache_cb_gen == s_cb_gen
+                     && s_vp_const_cache_gen == b->vp_const_gen;
+        VkDeviceSize cat, range;
+        if (can_reuse) {
+            cat = s_vp_const_cache_at;
+            s_vp_const_cache_hits++;
+        } else {
+            cat = ring_alloc(VK_CONST_SIZE, s_ubo_align, &map);
+            if (!map) return;
+            memcpy(map, b->vp_consts, VK_CONST_SIZE);
+            s_vp_const_cache_valid = 1;
+            s_vp_const_cache_gen = b->vp_const_gen;
+            s_vp_const_cache_cb_gen = s_cb_gen;
+            s_vp_const_cache_at = cat;
+            s_vp_const_cache_copies++;
+        }
         range = (VkDeviceSize)VK_CONST_SIZE * VK_INST_MAX;
         if (range > s_ubo_range) range = s_ubo_range;
         if (cat + range > RING_BYTES) range = RING_BYTES - cat;
@@ -4457,6 +4494,22 @@ static void vk_flip(void)
         }
     }
     {
+        static int on = -1;
+        static uint32_t last_frame;
+        if (on < 0) {
+            const char *e = getenv("RECOMP_VK_CONST_CACHE_STATS");
+            on = e && *e == '1';
+        }
+        if (on && s_frame - last_frame >= 300) {
+            uint32_t frames = s_frame - last_frame;
+            fprintf(stderr, "[vk] VP constant cache in %u frames: %u blocks copied,"
+                    " %u reused\n", frames, s_vp_const_cache_copies,
+                    s_vp_const_cache_hits);
+            s_vp_const_cache_copies = s_vp_const_cache_hits = 0;
+            last_frame = s_frame;
+        }
+    }
+    {
         static uint64_t last_ns, window_ns;
         static int lines;
         uint64_t now = hz_now();
@@ -4592,7 +4645,7 @@ static void vk_flip(void)
                     cy = (int)((float)crop * (float)s->ph / lh + 0.5f);
                     lh -= 2.0f * (float)crop;
                 }
-                if (xbox_video_widescreen() && lw < lh * 1.5f)
+                if (xbox_video_widescreen() && !s_frame_has_4x3_movie && lw < lh * 1.5f)
                     lw = lh * 16.0f / 9.0f;
                 scale = ww / lw < wh / lh ? ww / lw : wh / lh;
                 dw = (int)(lw * scale); dh = (int)(lh * scale);
@@ -4676,6 +4729,7 @@ static void vk_flip(void)
             create_swapchain();
         }
     }
+    s_frame_has_4x3_movie = 0;
     {
         static uint64_t last_save;
         uint64_t now = hz_now();

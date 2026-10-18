@@ -105,6 +105,9 @@ static GlRing s_vring = { 0, GL_ARRAY_BUFFER, 16 << 20, 0 };
 static GlRing s_iring = { 0, GL_ELEMENT_ARRAY_BUFFER, 4 << 20, 0 };
 static const uint32_t *s_regs;          /* the executor's method shadow */
 static uint32_t      s_frame;
+/* Set when this frame samples Conker's 640x480 linear XMV image. The movie
+ * carries its native 4:3 aspect even when the game presents gameplay wide. */
+static int            s_frame_has_4x3_movie;
 /* Hitch accounting (gl_flip logs frames over 50 ms): per frame, programs
  * compiled and textures uploaded, and the time spent on each. */
 static uint32_t s_hz_progs, s_hz_texs, s_hz_draws;
@@ -563,6 +566,9 @@ static GLuint tex_get(uint32_t va, uint32_t color, uint32_t w, uint32_t h,
     GlTex *t = NULL, *victim = NULL;
     uint32_t i, hash;
     Nv2aTexture nt;
+
+    if ((color == 0x24 || color == 0x25) && w == 640 && h == 480 && pitch == 640 * 2)
+        s_frame_has_4x3_movie = 1;
 
     for (i = s_tex_head[tex_bucket(va, color, w, h)]; i; i = s_tex_next[i - 1]) {
         GlTex *c = &s_tex[i - 1];
@@ -2266,7 +2272,7 @@ static void gl_flip(void)
             lh -= 2.0f * (float)crop;
         }
         /* A widescreen title renders 640x480 anamorphic: show it at 16:9. */
-        if (xbox_video_widescreen() && lw < lh * 1.5f)
+        if (xbox_video_widescreen() && !s_frame_has_4x3_movie && lw < lh * 1.5f)
             lw = lh * 16.0f / 9.0f;
         float scale = (float)ww / lw < (float)wh / lh ? (float)ww / lw : (float)wh / lh;
         int dw = (int)(lw * scale), dh = (int)(lh * scale);
@@ -2287,6 +2293,7 @@ swap:
     if (nv2a_host_frame_presented)
         nv2a_host_frame_presented(s && s_drew_any ? s->pw : 0, s && s_drew_any ? s->ph : 0);
     gl_step_done("swap");
+    s_frame_has_4x3_movie = 0;
     tex_bind_forget();
     {
         SDL_Event e;

@@ -534,3 +534,532 @@ Frame rate: 25–30 FPS in the training level with 20 FPS stretches (executor ~7
 Windmill (game thread 65–91 %). First visits to ThroneRoom and Windmill stalled 4–6 s compiling 18–20
 shaders. The guide's newer optimisation findings (fourth core, console PGO, LTO, code ordering, executor
 copies) are recorded as candidates in [06-performance.md](06-performance.md).
+
+## 2026-10-18: first single-player Switch crash captured (NRO `cfd4c805`)
+
+The user played the newly sent NRO in single-player and reported a crash. `tools/nxlink_run.sh
+192.168.1.248` captured the run at `run/net_logs/20261018-001825.log`. It was launched without `ARGS` and
+without `conker_env.txt`; startup logged that default settings were used. The app reported title-override
+full-memory mode with 3,189 MB available, so the crash was not caused by a missing launch argument or
+applet-mode memory limit.
+
+The game reached frame 1,466. Its last frame took 417 ms and drew 416 calls. The preceding performance
+windows reported 18.8, 25.0 and 22.8 FPS; heap use was 571–572 MB. There was no `[ICALL]` or `[STUB]`
+report before the crash.
+
+Crash report:
+
+```text
+[CRASH] exception 257 at PC=0x1ca9dc5de8 far=0x68e2b1cff0 (guest VA 0xFFFFFFF0)
+  guest: eax=00000000 ecx=00000000 edx=010FF7E8 ebx=00000000
+         esi=7419D860 edi=FFFFFFE0 esp=010FF754
+```
+
+Using the logged `switch_boot` address and the archived ELF's symbol value to account for the PIE load
+bias, the native PC resolves to `sub_00355430 + 312` at `gen/recomp_0046.c:20736`. That instruction reads
+the first argument's object at `+0x10`. The crash registers show `EDI=0xFFFFFFE0`, and the reported guest
+fault address is `0xFFFFFFF0`, matching that read. The stack's innermost recorded return address is
+`0x00355C91`; the following entries include `0x003DC9EB`, `0x003DC2F7` and `0x003DC09A`.
+
+Tracing the caller showed that `sub_00355B40` passes the result of `sub_00354610` directly to
+`sub_00355430`. The helper scans 32-byte entries, starting its best index at `-1`; when no candidate
+matches, it returns `base - 32`. In this run the collection base was null, so the result was
+`0xFFFFFFE0`. That is the invalid object pointer observed in EDI. The earlier `g_seh_ebp` hypothesis was
+incorrect: this read uses the function argument, not an inherited frame pointer.
+
+An initial manual guard was added at generated label `loc_00355C85` in NRO `3260c845`: it compared the
+returned pointer against `base - 32` and skipped recursion on that sentinel. It tried to obtain the base
+by loading the parent pointer saved at `[esp + 0x40]` and dereferencing its `+0x10` field. That version
+compiled, but the next hardware run exposed that this parent pointer can itself be invalid during the
+recursive walk; the guard caused a second crash. The guard is revised below. Generated output is ignored
+by Git, so the revised guard is also added to the tracked `tools/regen.sh` regeneration path. The
+exception logger did not need an EBP change to diagnose either crash.
+
+## 2026-10-18: second Switch crash in the sentinel guard (NRO `3260c845`)
+
+After the first crash was diagnosed, NRO `3260c845` was sent to `192.168.1.248` with no launch arguments.
+The Switch used its default settings and title-override full-memory mode (3,189 MB reported). It loaded
+front-end assets and opened `BootIntro.xmv`, then crashed before this run could verify the intro aspect,
+audio, or single-player gameplay. The log is `run/net_logs/20261018-005259.log`; no `[ICALL]` or `[STUB]`
+report preceded it.
+
+```text
+[CRASH] exception 257 at PC=0x54f47dfdb4 far=0x6121b08cf6 (guest VA 0x434C9CF6)
+  lr=0x54f47dfd5c sp=0x2b8bdc8780
+  guest: eax=74258240 ecx=74258240 edx=010FFE0C ebx=00000002
+         esi=7417D560 edi=01292600 esp=010FFE34
+  guest stack return addresses: 0x00354017, 0x002A56FD, 0x002A4910, ...
+```
+
+The runtime `switch_boot` address was `0x54f277f750`; its ELF symbol is `0x9e750`. Applying that PIE
+load bias resolves the faulting PC to ELF address `0x20FEDB4`, inside `sub_00355B40`, at the guard's
+`MEM32(ecx + 0x10)` read in `loc_00355C85`. The reported guest address is the invalid value loaded from
+the saved parent plus `0x10` (`0x434C9CE6 + 0x10`). This confirms the initial guard itself faulted while
+trying to recover the collection base through an invalid parent pointer; it is a separate crash site from
+the original `0xFFFFFFF0` access in `sub_00355430`.
+
+The guard now saves the exact collection base already loaded into `eax` immediately before the helper
+call, in the caller's unused stack local `[esp + 0x3C]`. After `sub_00354610` returns with `ret 8`, it
+compares the returned candidate directly to the saved input base minus 32. If they match, it takes the
+existing no-child path; it never dereferences the potentially invalid parent pointer. The tracked
+`tools/regen.sh` now reapplies this guard after code generation. `bash -n tools/regen.sh` passes; a full
+regeneration was not run. The original single-player crash is not yet considered resolved until the
+revised guard reaches gameplay without another exception.
+
+## 2026-10-18: revised recursive-walk guard built and sent (NRO `f976b53f`)
+
+The `conker-dev` Linux build completed with `cmake --build build/linux-vk -j2`. Its live run
+(`run/live/run.log`) advanced through frame 3,882; the last reported windows were about 59 FPS. The log
+contained no `[CRASH]`, `[ICALL]`, or `[STUB]`. The test container was stopped after that run.
+
+The Switch build completed with `VULKAN=1 STAGE_GAME=0 JOBS=2 ./switch/build.sh`. NRO MD5 is
+`f976b53fd542cc4e82b0fbe5d76ad550` (short ID `f976b53f`); the archived pair is
+`analysis/elf_archive/conker-vulkan_f976b53f.{nro,elf}`. `tools/nxlink_run.sh 192.168.1.248` sent and
+started it with no launch arguments. The Switch used default settings and title-override full-memory mode
+(3,189 MB reported). Its log, `run/net_logs/20261018-005801.log`, shows `BootIntro.xmv` opened and reached
+frame 2,149 without a `[CRASH]`, `[ICALL]`, or `[STUB]`; the nxlink log stream was still connected at the
+last check.
+
+This confirms the revised guard gets past the startup crash seen on NRO `3260c845`, but it does not yet
+close the single-player crash issue: the user has not replayed the route that crashed at frame 1,466 on
+`cfd4c805`. The 4:3 intro presentation is included in `f976b53f` but still needs visual confirmation on
+hardware. The intro audio investigation remains unresolved; no audio fix was included.
+
+## 2026-10-18: intro video aspect and audio follow-up
+
+The intro source `BootIntro.xmv` is 640×480 (4:3), WMV2 video with four mono 44.1 kHz Xbox ADPCM audio
+tracks. The renderer trace identified the sampled XMV frame as a 640×480 YUY2 texture (NV2A format
+`0x24`, pitch 1280; `0x25` is the alternate UYVY layout). A per-frame check now recognizes either layout
+and suppresses the gameplay widescreen expansion for that frame in both GL and Vulkan. That presents the
+frame at the source's 4:3 aspect without changing gameplay presentation. The Switch NRO `3260c845` was
+built and archived as `analysis/elf_archive/conker-vulkan_3260c845.{nro,elf}`; hardware aspect verification
+is pending.
+
+The audio investigation narrowed the silence to stream refill. The XMV contains 227 packets and later audio
+data for all four tracks; the game initially queues only the first two ADPCM packets per track (about 0.9
+seconds). APU notifications, IRQ 5, the deferred procedure call, and the DirectSound completion callbacks
+all execute. At the completion callback, the stream queue lookup returns no next buffer, and no later XMV
+packet is submitted. The audio path therefore is not failing because the source soundtrack ends, nor is the
+interrupt delivery path missing its completion event.
+
+The prior shader/pipeline-stall explanation is not confirmed. Linux traces still show long early frames with
+zero shader compilations and only about 2 ms spent uploading three textures; the configured cache path
+alone did not make the intro audio continue. No safe audio fix has been identified. The remaining target is
+the game's XMV/DirectSound packet producer and the conditions under which it stops queuing after packet two.
+
+The first Switch build attempt in `conker-dev` stopped at the build script's toolchain check because that
+container has no `/opt/devkitpro`. The same build succeeded on the host with its installed devkitPro
+toolchain; no source or build configuration change was needed. The resulting NRO is `3260c845`.
+
+## 2026-10-18: recursive-walk watchdog and no-match retry fix (candidate NRO `630412bd`)
+
+The hardware log from NRO `f976b53f` continued after the earlier frame-2,149 check. It reached frame 3,533,
+where one frame took 433 ms and the next performance window fell to 14.3 FPS. Rendering then stopped. The
+watchdog captured the guest after 20 seconds without a presented frame and again at 40 seconds:
+
+```text
+[WATCHDOG] no frame presented for 20 s; guest esp=0x010FF754
+  regs: eax=7428AC50 ecx=43540000 edx=010FF7E8 ebx=00000005 esi=74280280 edi=01293080
+  recent ICALL targets: FE0001D0 0055EA00 0055EB46 FE0000F0 ...
+    GS 010FF754 00355C85
+    GS 010FF758 7428AC50
+    GS 010FF75C 010FF7E8
+    ...
+[WATCHDOG] still no frame after 40 s; guest esp=0x010FF754
+```
+
+Both snapshots had the same guest stack pointer and return addresses. The first return address, `0x00355C85`,
+is the call from `sub_00355B40` to `sub_00354610`, the 32-byte-entry child search. The search can return
+`base - 32` when it has no match. The guard in `f976b53f` avoided recursing through that sentinel, but sent
+execution to `loc_00355C91`. If the current parent still had children to inspect, the branch at that label
+returned to `loc_00355C40` and repeated the same search with unchanged input. The watchdog does not record
+the guest instruction pointer, so the precise loop instruction is inferred from the unchanged stack and
+the generated control flow; it is consistent with the user-observed freeze.
+
+The no-match branch now jumps to `loc_00355C9F`, which sets the exhausted-child state and continues through
+the existing parent-processing path. This prevents the same child search from being retried indefinitely.
+The tracked `tools/regen.sh` preserves both the saved-base sentinel check and this branch target after
+regeneration.
+
+The Linux Vulkan target rebuilt successfully in `conker-dev`. A live Linux startup reached frame 534 at
+about 53 FPS before it was stopped; its captured startup log had no `[CRASH]`, `[ICALL]`, or `[STUB]` report.
+The Switch target rebuilt with `VULKAN=1 STAGE_GAME=0 JOBS=2 ./switch/build.sh`; the NRO MD5 is
+`630412bd7708c8c733a1625c05e1301c`, short ID `630412bd`, and the ELF MD5 is
+`8c204512da3c88dc9066dc60c88a3b91`. The archived pair is
+`analysis/elf_archive/conker-vulkan_630412bd.{nro,elf}`.
+
+The host-side nxlink attempt did not yield a guest log. Its first transcript
+(`run/net_logs/20261018-010453.log`) reported 32,065,659 bytes sent (41.53%), then failed to bind the local
+stdio listener with `Address already in use`. The retry
+(`run/net_logs/20261018-010536.log`) could not connect to the console. The console answered ping, but its
+NetLoader was not accepting nxlink at that check. The user subsequently reported that the game did not
+crash or stall at the previous location on the latest test, but its FPS dropped there. The report supports
+the no-match retry fix, while the exact NRO and frame-time measurements are not verified in a captured
+runtime log.
+
+Keep the crash/freeze fix separate from the performance follow-up. The previous `f976b53f` run's 433 ms
+frame identifies the area to profile, but it cannot establish the cost of the corrected traversal. Capture
+a runtime log from the fixed build and compare frame time, draw count, and guest-thread CPU around that
+slowdown before changing the traversal for speed.
+
+## 2026-10-18: NRO `630412bd` alternate-mode hardware pass
+
+The user completed another hardware pass using archived NRO `630412bd` (`analysis/elf_archive/conker-vulkan_630412bd.nro`). The streamed capture is `run/net_logs/20261018-012629.log` (2,953 lines). It launched with no `conker_env.txt`, in title-override full-memory mode (3,189 MB reported); the runtime assigned player 1 the handheld pad. The log does not explicitly report docked/handheld power or clock mode. It loaded multiplayer front-end character assets and the `MPBeach` level package, so this was an alternate multiplayer-content pass. It does not establish that the single-player location associated with the former freeze was exercised.
+
+The game presented through frame 1,939 and the session ended when the nxlink connection was reset (`exiting ...`), with no crash, exception, watchdog, or unresolved indirect-call report. All 145 kernel thunks resolved. One existing file-control operation was logged as a stub (`NtFsControlFile(0x90020)`); no failure was attributed to it in this run. The log shows a high startup/loading frame (3,981 ms at frame 3), plus shader-compilation hitches including 1,034 ms at frame 482 (two programs, 747 ms compiling), 366 ms at frame 663 (three programs, 174 ms compiling), and 234 ms at frame 880 (two programs, 107 ms compiling). The live shader count rose from 321 to 370, so this was not a fully warm-cache pass. A later frame-1,103 loading interval reported one draw and a 1.2 MB texture upload.
+
+The ten `[perf]` windows reported 4.4, 17.5, 26.1, 25.0, 28.6, 16.8, 8.2, 18.0, 20.9, and 19.6 FPS. The last three windows averaged 19.5 FPS; they are evidence for this alternate route only, not a measurement of the former single-player slowdown. In those late windows, `game:0` used 86–95% of one core and the largest other tracked thread used 54–60%; the GL thread reported 0% idle. This points to substantial CPU-side pressure, but there is no GPU timing and the test did not isolate the known slowdown. Late hitches were generally 50–67 ms with roughly 330–624 draws and no shader compilation or meaningful texture uploads. Audio pacing stayed at 1,500 frames/s with zero output gaps, underruns, or dropped buffers. Heap use reached 623 MB with 33 MB free in the arena.
+
+This capture confirms the corrected build runs through a multiplayer-content route without crashing, but it does not close the FPS-drop issue at the former recursive-walk freeze point. Keep that issue open and capture the prescribed warm-cache, repeatable single-player route with an event marker; then collect the separate `RECOMP_NX_PROFILE=2` pass if the slowdown repeats.
+
+## 2026-10-18: profiled Switch pass stalled on a PGRAPH NOP trap (NRO `630412bd`)
+
+The next capture used the same archived NRO with `ARGS=RECOMP_NX_PROFILE=2`; no source or build changes were made. The log is `run/net_logs/20261018-013420.log`. It loaded the `SoloSetup` text asset, reached frame 949, and reported FPS windows of 4.1, 29.0, 21.5, 25.0, and 18.0 before presentation stopped. It had prewarmed 377 programs and logged no shader compiles in the later measured windows. This was a profiled run, so its FPS is diagnostic only.
+
+Before the stall, `[perf] % of a core per thread` showed `game:0` at 43%, 79%, 74%, 27%, and 25% in successive windows. The `nv2a_ack_thread` was about 15%, 50%, 45%, 24%, and 34%; `nv2a_flag_thread` was about 15%, 10%, 6%, 5%, and 4%. The active threads therefore did not show all available CPU capacity saturated in these windows. These counters are per-thread CPU time, not physical-core placement. The process reported core mask `0x7`, while guest code was serialized under `RECOMP_GIL`; profile data alone does not justify changing affinity or removing that lock.
+
+At the last rendered frame, the runtime reported 18.0 FPS and 36.2 Hz vblank, then 0 FPS and 0 Hz. The pushbuffer executor repeatedly reported `NOP(315097153)` still pending, which is method `0x0100` with parameter `0x12C80041`; earlier in this same run it had handled 5,120 NOP traps. The 20- and 40-second watchdog snapshots showed no frames, the same guest stack pointer (`0x010FFEC0`), and PGRAPH interrupt status still asserted (`PMC_INTR=0x00001000`, enabled). No crash or exception was logged. The host-side nxlink capture was stopped after the 40-second watchdog while the console remained frozen.
+
+This is evidence of a missed PGRAPH software-interrupt acknowledgement during this profiled route, not evidence that the original single-player slowdown is caused by CPU saturation. It is not yet known whether sampling changed timing enough to expose the race or the same route hangs without profiling. Next, compare the same `SoloSetup` route without sampling, then use a lower-overhead profile (`RECOMP_NX_PROFILE=1`, optionally delayed until after startup) if the route is stable. Keep the CPU/core-allocation question separate from the PGRAPH wait until the latter is understood.
+
+## 2026-10-18: follow-up profiling reaches a later PGRAPH NOP wait (NRO `630412bd`)
+
+The unprofiled follow-up used the archived NRO with default settings; its log is `run/net_logs/20261018-014209.log`. It loaded `Mp_Frontend` and the `MPBeach` package, passed frame 949, and reached frame 1,906. FPS windows ranged from 4.4 to 28.4; late windows were 12.8–21.7 FPS. Late `[perf]` reports showed `game:0` as high as 94% of one core and the NV2A acknowledgement/executor thread as high as 71%. NOP traps continued to be handled. The host then received `Connection reset by peer`; no crash, exception, or pending NOP appears before that end. This is a partial negative control for the earlier frame-949 stall, not a full-duration control for the later hang.
+
+The next capture used `RECOMP_NX_PROFILE=1 RECOMP_NX_PROFILE_AFTER=15`; no source or build changes were made. The log is `run/net_logs/20261018-014455.log`. It again loaded `Mp_Frontend` and `MPBeach`, and the lower-overhead profiler passed frame 949. It reached frame 3,194, with settled FPS windows mostly around 13.0–15.4 and 60 Hz vblank. In the late windows, `game:0` used 85–92% of one core, `nv2a_ack_thread` 52–60%, `nv2a_flag_thread` 22–29%, and the next tracked thread 5–7%. The process still reported core mask `0x7` and guest code serialized under `RECOMP_GIL`; these are per-thread counters and do not report physical-core placement.
+
+The profile's later three-window caller report for `nv2a_ack_thread` attributed 19.8% of its sampled callers to `nv2a_pb_scan`, 13.8% to `vk_draw_raw`, and 8.7% to `nvk_sw_emitted_equal`. Its sampled PCs also included `svcSleepThread` (about 38%), `nv2a_pb_exec_method` (about 9%), `memmove` (about 6%), and `__swbuf_r` (about 8%). These percentages describe profile samples, not exclusive CPU time or GPU execution time; the sampled PCs include wait paths. The results make pushbuffer walking and draw-state submission concrete leads for the executor, but do not yet identify an optimization or prove that the thread is wasting CPU while yielding.
+
+The run then stalled after frames 3,191–3,194 took 333, 467, 101, and 84 ms. The first frame compiled one shader in 119 ms; the next frames reported no shader compilation. The pushbuffer executor reported `NOP(354418753)` (`0x15200041`) still pending with `PMC_INTR=0x00001000` enabled. It had handled at least 66,560 earlier NOP traps. At the same time, the log found thread 1007 waiting on guest lock `0x004E1674` held by thread 0 at guest PC `0x004C38D8`, and reported `[OHCI0] guest IRQL never dropped (depth 2); delivering anyway`. The last captured perf window was 10.2 FPS / 47.4 Hz; no crash or exception was logged. The user reported the game frozen while the NOP remained pending; the host capture was interrupted afterward.
+
+This later stall means the PGRAPH wait is not limited to the profile-2 capture or frame 949. The unprofiled run ended at frame 1,906, so it does not show whether the later wait also occurs without sampling. Do not change thread affinity or remove `RECOMP_GIL` based on these samples. After console recovery, repeat the same `MPBeach` route without profiling through frame 3,200 or until it stalls; if it does, trace NOP acknowledgement, the guest lock, and IRQL delivery together. This remains separate from the unmeasured single-player slowdown.
+
+## 2026-10-18: profile-2 reaches Windmill and identifies renderer CPU leads
+
+The user ran the corrected baseline NRO `630412bd` with `RECOMP_NX_PROFILE=2` and went directly to the area
+associated with the earlier freeze. The streamed log is `run/net_logs/20261018-015143.log`. It loaded
+`Level\Windmill\default.rbm`, logged the Windmill level text, and reached frame 1,248. The connection
+then reset; the captured log contains no crash, watchdog, pending NOP, or exception. Its settled FPS windows
+were 21.4, 18.5, 23.3, 24.5, and 18.7 after an initial 3.0 FPS window. The final two vblank readings were
+59.9 and 59.8 Hz. This is a diagnostic profile, so these FPS values are not a benchmark. The log reaches
+Windmill but contains no explicit marker for the exact formerly reported slowdown event.
+
+In the last two profile windows, `game:0` used about 90–93% of one core and the NV2A acknowledgement thread
+about 45–49%. On `game:0`, sampled PCs included `svcSleepThread` (12.1%), `svcSignalProcessWideKey` (7.5%),
+and `sub_003DD570` (5.9%). On the NV2A acknowledgement thread, sampled PCs included `svcSleepThread`
+(41.2%), `nv2a_pb_exec_method` (8.8%), `memmove` (6.6%; this address also resolves as `memcpy`),
+`__swbuf_r` (6.4%), `nv2a_pb_scan` (4.4%), and `vk_draw_raw` (2.8%). Caller samples included
+`nv2a_pb_scan` (18.8%), `vk_draw_raw` (13.1%), and `nvk_sw_emitted_equal` (6.7%). These are sample shares,
+not CPU-time or GPU-time shares; the prominent sleep sample also means the PC distribution cannot be read
+as exclusive active work. No physical-core placement or GPU execution time was captured.
+
+The same Windmill pass reported recurring 400–566 ms hitches around frames 834–837, 950–953, 1,070–1,073,
+and 1,221–1,224, with no shader compiles or texture uploads in those hitch records. The capture does not
+attribute those intervals to a specific function or prove they are all the same event. It does show that
+shader compilation and texture upload are not recorded causes for those particular hitches.
+
+## 2026-10-18: first renderer CPU cache candidate
+
+Based on the repeated copy samples and the renderer path, the first candidate caches the 3,072-byte
+vertex-program constant block using the guest constant generation and the active command-buffer slot's
+generation. Instanced/pending draws continue to receive a fresh block where required so pending draw data
+remains contiguous. The cache can be disabled with `RECOMP_VK_CONST_CACHE=0`; it is enabled by default.
+This removes a host copy only when the relevant constant generation is unchanged. It does not change guest
+execution, command order, thread affinity, or lock behavior.
+
+Candidate 1 was built with:
+
+```sh
+VULKAN=1 STAGE_GAME=0 JOBS=2 SD_ROOT=build/staging-cpu-cache ./switch/build.sh
+```
+
+The archived pair is `analysis/elf_archive/conker-vulkan_b8ff2fc5.nro` (MD5
+`b8ff2fc56b8b04178a28cdab28299207`) and `analysis/elf_archive/conker-vulkan_b8ff2fc5.elf` (MD5
+`7dcfbebd04613228787b92e585ce213e`). The hardware capture is
+`run/net_logs/20261018-020128.log`, launched with `RECOMP_DRAW_STATS=1` and no sampling profiler. It loaded
+Windmill, reached frame 4,301, and ended on connection reset without a crash or pending NOP. In later
+300-frame windows the cache reported roughly 50–61% reuse (examples: 44,934 copied / 69,768 reused;
+57,548 / 76,666; 59,389 / 58,416). Earlier transition work had a lower reuse ratio, around 36%.
+
+This capture cannot establish a performance gain: `RECOMP_DRAW_STATS=1` also activates culling diagnostics,
+which measured about 13–21 microseconds per draw in this run. Windmill FPS windows were 17.3, 17.9, 17.1,
+21.4, and 24.3, but the added culling work contaminates the comparison. The counters establish that the
+cache avoids copies; they do not quantify time saved. The log also recorded non-shader/non-upload hitches:
+frame 4,144 took 150 ms while one shader compiled in 60 ms, then frame 4,145 took 534 ms with no compile or
+upload; frames 4,248–4,251 took 401, 450, 468, and 367 ms with no compile or upload.
+
+Candidate 2, `analysis/elf_archive/conker-vulkan_e037bd66.{nro,elf}`, was built to separate cache counters
+from culling diagnostics. It adds opt-in `RECOMP_VK_CONST_CACHE_STATS=1` reporting while restoring
+`RECOMP_DRAW_STATS` to its original draw-count-only behavior. The NRO MD5 is
+`e037bd66b79dbb3a807f726f5d1866b1`; the ELF MD5 is `30dcef04dca6e716f8afb9fa8eb1422d`. The build
+completed successfully with existing enum-conversion warnings in `depth_texture_view` and no errors.
+At this point in the session Candidate 2 had not run on hardware. The first launch attempt is recorded in
+`run/net_logs/20261018-020717.log`; the console answered ping, but nxlink failed because NetLoader was not
+accepting the connection. Use the same NRO and route for the cache-on and cache-off runs, with the sampler
+and culling diagnostics disabled. The two launch settings are:
+
+```sh
+ARGS='RECOMP_VK_CONST_CACHE_STATS=1'
+ARGS='RECOMP_VK_CONST_CACHE=0 RECOMP_VK_CONST_CACHE_STATS=1'
+```
+
+Compare repeated warm-cache windows and retain the change only if the improvement exceeds run-to-run
+variation without correctness or frame-pacing regressions. No speedup has yet been confirmed. Once this
+controlled A/B is complete, measure the user's reported single-player slowdown with a marked save-point
+route; do not infer its cause from this Windmill profile alone.
+
+## 2026-10-18: clean cache-on Windmill run (NRO `e037bd66`)
+
+The cache-on run used `analysis/elf_archive/conker-vulkan_e037bd66.nro` with
+`RECOMP_VK_CONST_CACHE_STATS=1`. The streamed log is `run/net_logs/20261018-021534.log`. Sampling profiling
+and `RECOMP_DRAW_STATS` were off, so the sampler and culling diagnostics did not contaminate this capture.
+It loaded `Level\Windmill\default.rbm`, reached frame 2,016, and ended on `Connection reset by peer`.
+The capture contains no logged crash, watchdog, exception, or pending PGRAPH NOP. It handled NOP traps
+throughout; the APU stayed around 1,500 frames/s with no audio gaps, underruns, or dropped buffers.
+
+The early FPS windows before Windmill were 4.4, 17.2, and 25.9 FPS while the route loaded. After the
+Windmill content loaded, the six settled windows were 22.3, 18.9, 22.6, 24.9, 24.8, and 30.0 FPS, with
+vblank near 60 Hz. Late `game:0` samples ranged from 77–94% of one core; the NV2A acknowledgement/executor
+thread ranged from 48–73%. These are single-run measurements from the cache-on side only; they do not
+establish a speedup.
+
+The six 300-frame cache reports were: 47,063 copied / 36,790 reused; 55,430 / 51,209; 48,261 / 83,863;
+66,595 / 103,963; 55,999 / 54,855; and 58,760 / 63,217. Reuse therefore varied from about 44% to 64% of
+the reported total blocks, depending on the window. There is no culling-stat overhead in this run, but the
+counter only measures reuse counts and not the CPU time saved by avoiding those copies.
+
+Long hitches still occurred at frames 1,299–1,301 (450–468 ms), 1,470–1,473 (383–468 ms), and
+2,013–2,016 (384–467 ms). Those hitch records show zero shader compiles and zero texture uploads. The
+capture does not identify the cause of these long frames. For the A/B control, use the same NRO, route,
+console mode, and warm-cache conditions with only `RECOMP_VK_CONST_CACHE=0` added; then compare the same
+metrics and repeat both settings before drawing a performance conclusion.
+
+## 2026-10-18: cache-off control sent, route capture pending
+
+After the cache-on run, the same archived NRO `e037bd66` was sent with
+`RECOMP_VK_CONST_CACHE=0 RECOMP_VK_CONST_CACHE_STATS=1`. The live nxlink log is
+`run/net_logs/20261018-021920.log`. Startup confirmed both arguments and the application began loading the
+intro. At that point in the session, the cache-off Windmill route had not yet been captured. Its completed
+results are recorded in the following entry.
+
+## 2026-10-18: cache-off Windmill control completed (NRO `e037bd66`)
+
+The user completed the cache-off control using the same `e037bd66` NRO with
+`RECOMP_VK_CONST_CACHE=0 RECOMP_VK_CONST_CACHE_STATS=1`. The capture is `run/net_logs/20261018-021920.log`.
+It loaded `Level\\Windmill\\default.rbm`, reached frame 1,619, and ended on `Connection reset by peer`;
+there is no logged crash, exception, or pending PGRAPH NOP. APU pacing stayed near 1,500 frames/s and audio
+reported no gaps, underruns, or dropped buffers.
+
+After Windmill loaded, the settled FPS windows were 20.3, 19.6, 22.1, 24.3, and 21.8, with vblank around
+60 Hz. The four later cache-stat windows each reported zero reuse and 115,198, 171,624, 119,317, and
+121,469 copies. Long non-shader/non-upload hitches persisted: frame 651 took 521 ms with eight draws;
+frames 1,206–1,209 took 384–534 ms; frames 1,327–1,330 took 384–467 ms; frames 1,426–1,429 took
+383–467 ms; and frames 1,617–1,619 took 450–467 ms. The 521 ms frame occurred during a low-draw transition;
+the log does not identify the cause of the long hitches.
+
+This is one cache-off run against one cache-on run, not a repeated benchmark. The FPS ranges overlap
+substantially and are not consistently faster or slower in either mode. The cache-on run reduced block
+copies by reusing blocks, while the cache-off run predictably reported no reuse; the measured logs do not
+yet show that this reduced CPU time or improved Switch FPS. At this point, the planned follow-up was to
+rebuild the Linux target and see whether the scripted pad input could reach Windmill in `conker-dev`; the
+later Docker reachability check and its result are recorded below. Keep lavapipe timing separate from Switch
+performance claims.
+
+## 2026-10-18: profile-2 Windmill run stopped presenting in a guest tree routine (NRO `e037bd66`)
+
+The same archived NRO/ELF pair was launched with `RECOMP_NX_PROFILE=2`; the streamed log is
+`run/net_logs/20261018-022626.log`. It loaded `Level\Windmill\default.rbm` and ran through frame 2,831.
+Frames 2,830 and 2,831 took 1,902 ms and 2,086 ms, with 1,254 and 1,175 draws. Frame 2,830 uploaded
+three textures totaling 0.1 MB in 5 ms; frame 2,831 had no texture upload or shader compile. Later windows
+reported 0.1 FPS and then 0.0 FPS / 0.0 Hz vblank while `game:0` stayed at 98–100% of one core. In those
+later windows the guest indirect/kernel call counters dropped to zero even as the game thread stayed busy.
+The NV2A executor and the APU did not show a matching stall; APU pacing stayed near 1,500 frames/s and
+audio reported no gaps, underruns, or dropped buffers.
+
+The last nine profile windows (indices 12–20) attributed 75.1% of the game-main thread's sampled PCs to
+`sub_000139D0`. On `nv2a_ack_thread`, sampled PCs included `nv2a_pb_exec_method` (10.8%), `memmove`
+(5.9%), `nv2a_pb_scan` (5.8%), and `vk_draw_raw` (3.2%); 32.1% of its samples were in `svcSleepThread`.
+These are sampled-PC shares, not CPU-time percentages or GPU timings. The main-thread concentration points
+to guest work as the immediate lead for this stall; renderer CPU work remains a separate optimization path.
+
+Source inspection shows `sub_000139D0` attaches a node to a tree, updates its size and root/extreme links,
+then checks parent/uncle color and performs rotations and recoloring. Its callers include
+`sub_000136E0` and `sub_00013890`. This resembles a standard red-black-tree insert/rebalance routine. The
+fix-up walks parent links upward, so a cycle or malformed parent chain could keep it busy; the profile does
+not distinguish that from an unusually high volume of valid insertions. This is a strong lead, not a
+confirmed root cause. The caller report is inconclusive without usable frame pointers, and the Switch
+`prof.bin` was not retrieved.
+
+The user described a black screen/crash. The streamed log shows a presentation stall but no exception,
+crash report, pending PGRAPH NOP, or watchdog report. The profiler continued reporting after frames stopped;
+the nxlink session later ended with `Connection reset by peer`, so this capture does not confirm that the
+application process crashed.
+
+For a local reachability check, a copy-on-write clone of `run/save` was mounted into the `conker-dev`
+container. It reached the title and `Level\TrainingLevel`; the chapter selector showed “Hungover” as not
+available and did not provide a direct Windmill route. This Docker run did not reproduce the Windmill stall.
+Its lavapipe frame rate is not Switch performance evidence. Next, trace the tree insert/rebalance path and
+add narrowly scoped diagnostics only if a comparable route can exercise it; do not add an arbitrary loop
+exit or change tree semantics from this profile alone.
+
+## 2026-10-18: tree-insert diagnostic build validated in Docker
+
+Added `tools/tree_insert_diag.py` and an opt-in hook in `tools/regen.sh`. With `TREE_INSERT_DIAG=1`, the
+regeneration path adds compile-time-guarded instrumentation to the generated `sub_000139D0`; the build must
+also define `RECOMP_TREE_INSERT_DIAG=1`. It reports completed insert/fix-up totals every 16,384 calls and
+prints the tree, inserted node, current node, parent, and grandparent when one fix-up reaches 128 steps and
+again at later powers of two. The normal build has no instrumentation or guest behavior change. The
+diagnostic build does extra logging and is not for performance scoring.
+
+The generated source was cloned into `build/tree-diag-gen` and compiled in `conker-dev` as
+`build/linux-vk-tree-diag/conker_recomp`; the build completed without errors (the existing compiler
+warnings remain). Running it against the copy-on-write save reached `Level\TrainingLevel` without a crash.
+No long-fix-up line appeared there. The 16,384-call aggregate threshold was not reached, and TrainingLevel
+is not the Windmill stall route, so this does not establish whether the routine is called at all in that
+scene or rule out a Windmill parent-link cycle.
+
+The `conker-dev` image has the NVK SDK and glslang but lacks `/opt/devkitpro/cmake/Switch.cmake`, so this
+session produced no Switch diagnostic NRO. The next useful capture needs the same Windmill route on the
+diagnostic NRO; until then, leave the insert/rebalance semantics unchanged.
+
+## 2026-10-18: Switch tree-insert diagnostic capture started (NRO `5924ba1f`)
+
+Built and archived a Switch diagnostic pair as
+`analysis/elf_archive/conker-vulkan_5924ba1f.{nro,elf}`. The NRO is 77,207,749 bytes and its MD5 is
+`5924ba1fe33b426f0ab22ebc37065606`; the matching ELF MD5 is
+`d05a4005d7016095af0414b87cc47956`. The isolated build defines
+`RECOMP_TREE_INSERT_DIAG=1`; diagnostics are still opt-in and the guest tree algorithm is unchanged. This
+build was compiled on the host with devkitPro after confirming that the Docker image itself lacks the Switch
+toolchain.
+
+The NRO was sent to the Switch at `192.168.1.248` with no `RECOMP_NX_PROFILE` argument, so periodic runtime
+summaries remain enabled without the sampling profiler. It records per-thread busy percentages, frame
+hitches/draw counts, and APU/audio status, but it has no function-level renderer samples. The live capture is
+`run/net_logs/20261018-030841.log`. It booted under title takeover/full memory, loaded the game XBE, and
+initialized the Vulkan/NVK renderer. The user is testing the Windmill route for 5–10 minutes with the
+console overclocked. This run is diagnostic only and its FPS must not be used as a stock-clock benchmark.
+At the latest interim check, it had loaded `Level\Windmill` and continued past frame 12,066, well beyond the
+previous stall at frame 2,831. It logged 217–267 ms hitches at frames 6,898–6,903 and recurring 50–51 ms
+hitches around frames 7,745–7,859, without shader compilation or substantial texture upload. Later hitches
+at frames 12,039–12,040, 12,060–12,061, and 12,064–12,066 coincided with shader compilation: frame 12,064
+took 517 ms with three programs compiled in 302 ms; frame 12,066 took 334 ms with two programs compiled in
+172 ms. Texture uploads in those windows were at most 0.0 MB / 2 ms. No `[tree-insert-diag]` record had
+appeared yet. The capture is still in progress; inspect it after the user finishes for fix-up records,
+aggregate call counts, frame/presentation progress, thread activity, audio, and whether a stall or crash
+occurred. This run did not enable `RECOMP_NX_PROFILE=2`, so it cannot identify renderer hot functions for
+this build. Until the diagnostic evidence is available, the tree-cycle theory remains unconfirmed and no
+guest semantics should change.
+
+
+## 2026-10-18: completed overclocked Switch capture (NRO `5924ba1f`)
+
+The user completed the diagnostic run from `analysis/elf_archive/conker-vulkan_5924ba1f.{nro,elf}`. The
+NRO MD5 is `5924ba1fe33b426f0ab22ebc37065606`; the ELF MD5 is
+`d05a4005d7016095af0414b87cc47956`. The streamed log is `run/net_logs/20261018-030841.log` (4,701 lines,
+245,448 bytes). It was launched at `192.168.1.248` under title takeover/full memory, with tree-insert
+instrumentation enabled and no `RECOMP_NX_PROFILE` argument. The user ran overclocked. The log ends with
+`recv: Connection reset by peer`, `exiting ...`, and `EXIT_CODE=0`; it contains no `[CRASH]`, exception,
+watchdog, unresolved PGRAPH NOP, or evidence of a process crash.
+
+The load route was `Level\Frontend` → `Level\Windmill` → `Level\Frontend` → `Level\Mp_Frontend` →
+`Level\MPBeach`. It passed the previous frame-2,831 Windmill presentation stop and continued through at least
+frame 6,903 before leaving Windmill; the final reported frame was 14,282. The earlier stop did not recur in
+this overclocked diagnostic run, which does not prove that the issue is fixed under normal clocks or other
+routes.
+
+There are 51 `[perf]` windows and 444 `[hitch]` records (frames at least 50 ms). Seventy-seven hitches were
+at least 100 ms, 67 were at least 200 ms, and the maximum was 3,570 ms. Windmill contributed 32 performance
+windows at 21.9–34.7 FPS with vblank near 60 Hz, and 95 hitch records: 51 at least 100 ms, 50 at least
+200 ms, maximum 608 ms. No shader was compiled in Windmill. Ninety of its 95 hitch records had neither a
+shader compile nor a texture upload. Repeated six-frame bursts included frames 2,476–2,481 (217–267 ms),
+2,894–2,899 (217–267 ms), 3,051–3,056 (217–283 ms), 3,098–3,103 (234–284 ms), 4,478–4,483,
+5,163–5,168, 5,501–5,506, and 6,898–6,903 (the latter groups were 217–267 ms). These frames had hundreds
+of draws and no reported shader/texture work, making guest CPU or renderer CPU work a lead; no function
+samples or GPU timers were captured, so the exact source remains unknown.
+
+`MPBeach` contributed 14 performance windows at 11.0–29.8 FPS and 315 hitch records, including 19 at least
+100 ms and 13 at least 200 ms. Shader compilation caused several identifiable long frames: frame 11,968
+took 3,570 ms, including 2,069 ms compiling 20 programs; frame 12,068 took 1,985 ms, including 1,073 ms
+compiling eight programs; frame 11,709 took 584 ms, including 465 ms compiling one program; frame 12,064
+took 517 ms, including 302 ms compiling three programs. Other large MPBeach hitches did not compile
+shaders or meaningfully upload textures, so compilation does not explain the whole route. The final summary
+reported 21.1 FPS, 60.0 Hz vblank, 1,500 APU frames/s, zero audio gaps/underruns/dropped buffers, and
+658 MB heap use with 49 MB arena space free. This is an overclocked diagnostic sample, not a stock-clock
+benchmark.
+
+Neither `[profile]` nor `[tree-insert-diag]` appeared. The tree diagnostic emits an individual record only
+at 128 or more fix-up iterations and an aggregate every 16,384 calls. Their absence means those reporting
+thresholds were not reached; it does not prove `sub_000139D0` was not called. The prior cyclic-parent-chain
+theory is weakened for this route but remains unproven. The capture has useful route and resource-correlation
+data, but no sample profile of the renderer. The next software-side work should keep the renderer hot path
+active, test the existing constant-block cache carefully, and avoid changing guest tree semantics based on
+this log alone.
+
+## 2026-10-18: historical intro-audio evidence review
+
+The earliest Switch logs reviewed (`run/net_logs/20261016-223841.log`,
+`run/net_logs/20261017-002117.log`, and `run/net_logs/20261017-020541.log`) each show the game opening
+`dvddata\fmv\frontend\BootIntro.xmv`; they also show `[APU] host audio output active` and later
+`[APU] started by the title`. These logs have no intro-specific audio dump, voice cursor, packet count, or
+per-window signal measurement. They corroborate that the video path and APU initialized, but do not by
+themselves prove how long the intro soundtrack was audible. The user's recollection that early intro builds
+had sound while the main menu was black is retained as a useful observation, distinct from the captured log
+evidence.
+
+The old black front end was independently traced to rendering: the title continued issuing hundreds of
+3D draws while the menu stayed black, and renderer fixes later made the front end visible. That separates the
+menu picture failure from the audio producer at the architectural level. The Switch `video_pump.c` host FMV
+player is Windows-only and is not the Switch movie/audio path; the title's own XMV code feeds DirectSound/APU.
+
+Source history from the first boot commit (`ac33bfb`) to the current tree shows no edits to the DirectSound
+implementation or APU voice processor. The concrete audio-path change was commit `c130f84`, which changed
+`apu_phys()` so addresses in `[0x08000000, 0x80000000)` are read as guest virtual addresses. This fixed
+streamed game sounds whose VAs, such as `0x7415D7A0`, had previously been masked to unrelated low memory.
+It is a specific build difference worth checking against the intro stream segment addresses, but current
+traces place the cutoff later: four mono XMV voices queue two ADPCM packets each; completion callbacks and
+IRQ/DPC run; the game's stream queue lookup then returns no next buffer and no later XMV packet is submitted.
+The address fix might affect what the APU reads, but it does not yet explain why the guest producer stops
+submitting packets. Do not revert `c130f84`; compare the early and current stream descriptor/segment VAs and
+packet-completion state before deciding whether the address interpretation contributes.
+
+The cache-folder correction in `0d9fb5c` changes shader/pipeline-cache placement, not XMV/DirectSound code.
+The earlier theory that first-use shader compilation consumes the initial audio lead is still unconfirmed:
+subsequent Linux traces show the intro audio cutoff with no shader compiles and only about 2 ms spent on
+texture uploads. A useful follow-up is to capture an intro-only audio dump and the four voices' packet/segment
+addresses and queue state through the first completion, then compare the values with the archived early
+build's launch log and current build. Do not infer soundtrack output from APU initialization or the audio
+peak later in a long session.
+
+
+## 2026-10-18: Docker cache A/B and intro PCM capture
+
+The current Linux Vulkan executable built in the available `conker-dev` image (`docker run ... conker-dev
+cmake --build build/linux-vk -j2`); Ninja reported `no work to do`, so the executable already matched the
+current source timestamps. Two 60-second headless runs used independent copies of `run/live/save`, the same
+binary, `RECOMP_LINUX_PROFILE=1`, and the same startup route. The cache-on run used
+`RECOMP_VK_CONST_CACHE=1`; the control used `RECOMP_VK_CONST_CACHE=0`. Both opened `BootIntro.xmv`, ran the
+front-end path without a crash report, and settled near the lavapipe/vblank limit: cache-on recorded 59.9 FPS
+at frames 1,132, 1,732, 2,332, and 2,932; cache-off recorded 59.9–60.0 FPS at frames 1,139, 1,739, 2,339,
+and 2,939. Both began near 53–54 FPS during startup. On this front-end route the stats showed 3,000
+constant blocks copied and zero reused in every 300-frame window, with the first partial window reporting
+3,229 copies and zero reuse. This workload did not exercise the cache opportunity seen in Windmill. The
+runs were profile-instrumented and hit the Linux display/vblank cap; they do not establish Switch speed.
+The existing cache remains a copy-reduction optimization (44–64% reuse in the prior Windmill capture), but
+there is still no measured FPS improvement, and this Docker route cannot decide its value in Windmill.
+
+A separate 25-second Docker startup captured ten seconds of the exact PCM passed toward SDL using
+`RECOMP_AUDIO_DUMP=/work/run/cache-ab/intro.raw,0,10`; the headless SDL driver was dummy. The raw file
+contains 1,920,000 bytes (48 kHz, stereo, 16-bit). Its 100 ms RMS windows contain nonzero samples from
+0.30 to about 1.40 seconds after the audio device opened, with a peak of 7,737; every window from 1.40 to
+10.00 seconds is exactly zero. The same log opened `BootIntro.xmv` and reported that the title started the
+APU. This reproduces a brief PCM burst followed by silence in the Linux route and gives a concrete artifact
+for comparison. The log has no timestamp aligning the movie's first frame with the device-relative sample
+clock, and a dummy output cannot verify audibility, so it does not prove the exact soundtrack cutoff time or
+soundtrack identity. Files: `run/cache-ab/audio.log` and `run/cache-ab/intro.raw`.
+
+This strengthens the stream-refill lead: there is a short nonzero output interval followed by sustained zero
+PCM, while previous traces showed callbacks completing but no later XMV packet being submitted. The early
+build logs and commit comparison above still do not prove that the complete intro soundtrack played in the
+first iteration. The only concrete audio-path change after the initial commit is `c130f84`'s high-VA APU
+address handling; compare the stream segment/descriptor addresses across the packet completion before
+changing it or the game producer.

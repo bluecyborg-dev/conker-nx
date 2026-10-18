@@ -62,7 +62,8 @@ def main():
     for line in open(a.log, errors="replace"):
         if line.startswith("[prof] slots:"):
             for s, off in re.findall(r" (\d+)=([0-9a-f]+)", line):
-                slots[int(s)] = name_of(int(off, 16)) if int(off, 16) else "?"
+                entry = int(off, 16)
+                slots[int(s)] = "game main" if entry == 0 else name_of(entry)
             continue
         m = re.match(r"\[profile%s\] slot (\d+) n (\d+):(.*)" % ("-lr" if a.callers else ""), line)
         if not m:
@@ -82,7 +83,7 @@ def main():
 
     for slot in sorted(totals, key=lambda s: -totals[s]):
         n = totals[slot]
-        print("slot %d (%s): %d samples in %d windows (%.0f%% of a core), top granules cover %.0f%%"
+        print("slot %d (%s): %d samples in %d windows (%.0f%% of expected 1 kHz samples), top granules cover %.0f%%"
               % (slot, slots.get(slot, "?"), n, windows[slot], n / (windows[slot] * a.window_s * 10.0),
                  100.0 * shown[slot] / n))
         for fn, c in per_slot[slot].most_common(a.top):
