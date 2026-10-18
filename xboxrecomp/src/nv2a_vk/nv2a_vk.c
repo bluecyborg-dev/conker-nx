@@ -53,6 +53,7 @@
  *                                    at the top and at the bottom
  *   RECOMP_VK_VALIDATION=1           (Linux) enable the Khronos validation layer
  *   RECOMP_VK_HEADLESS=1             (Linux) no window, no present
+ *   RECOMP_VK_GPU_TIMING=1           per-frame GPU command-buffer duration
  */
 #include "nv2a_vk.h"
 #include "../nv2a_gl/gl_psh.h"
@@ -130,6 +131,9 @@ static VkDeviceSize     s_ubo_align = 256;
 static uint32_t         s_ubo_range = 16384;
 static VkFormat         s_depth_fmt = VK_FORMAT_D24_UNORM_S8_UINT;
 static int              s_have_bc, s_have_depth_clamp;
+static int              s_gpu_timing;
+static float            s_timestamp_period;
+static uint32_t         s_timestamp_bits;
 
 static PFN_vkCmdPushDescriptorSetKHR  p_push_desc;
 static PFN_vkCmdSetVertexInputEXT     p_vertex_input;
@@ -195,11 +199,15 @@ typedef struct {
     VkCommandBuffer cb;
     VkFence         fence;
     VkSemaphore     acquired, rendered;
+    VkQueryPool     gpu_queries;
     VkBuffer        ring;
     VkDeviceMemory  ring_mem;
     uint8_t        *ring_ptr;
     VkDeviceSize    ring_off;
     int             submitted;
+    int             gpu_segment_pending;
+    uint32_t        gpu_frame;
+    uint64_t        gpu_ticks;
     Garbage        *garbage;
     uint32_t        ngarbage, garbage_cap;
 } Frame;
@@ -245,12 +253,61 @@ static void garbage_free(Frame *f)
     f->ngarbage = 0;
 }
 
+/* Optional GPU execution-time capture. The query spans the frame command
+ * buffer, not the CPU's wait/present time. Results are read only after the
+ * frame fence is signalled, so this adds no new wait to the rendering path.
+ * Large frame-ring flushes are timed as segments and summed for the frame. */
+static void gpu_segment_begin(Frame *f)
+{
+    if (!s_gpu_timing || !f->gpu_queries)
+        return;
+    vkCmdResetQueryPool(s_cb, f->gpu_queries, 0, 2);
+    vkCmdWriteTimestamp(s_cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, f->gpu_queries, 0);
+    f->gpu_segment_pending = 1;
+}
+
+static void gpu_segment_end(Frame *f)
+{
+    if (s_gpu_timing && f->gpu_queries && f->gpu_segment_pending)
+        vkCmdWriteTimestamp(s_cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, f->gpu_queries, 1);
+}
+
+static void gpu_segment_collect(Frame *f)
+{
+    uint64_t ticks[2];
+    uint64_t delta;
+    if (!s_gpu_timing || !f->gpu_queries || !f->gpu_segment_pending)
+        return;
+    if (vkGetQueryPoolResults(s_dev, f->gpu_queries, 0, 2, sizeof ticks, ticks,
+                              sizeof ticks[0], VK_QUERY_RESULT_64_BIT) != VK_SUCCESS) {
+        fprintf(stderr, "  [vk-gpu] timestamp query failed for frame %u\n", f->gpu_frame);
+        f->gpu_segment_pending = 0;
+        return;
+    }
+    delta = ticks[1] - ticks[0];
+    if (s_timestamp_bits < 64)
+        delta &= (1ull << s_timestamp_bits) - 1ull;
+    f->gpu_ticks += delta;
+    f->gpu_segment_pending = 0;
+}
+
+static void gpu_frame_report(Frame *f)
+{
+    if (!s_gpu_timing)
+        return;
+    fprintf(stderr, "  [vk-gpu] frame=%u gpu_ms=%.3f\n", f->gpu_frame,
+            (double)f->gpu_ticks * (double)s_timestamp_period / 1000000.0);
+    f->gpu_ticks = 0;
+}
+
 static void frame_begin(void)
 {
     VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
     s_f = &s_fr[s_fi];
     if (s_f->submitted) {
         vkWaitForFences(s_dev, 1, &s_f->fence, VK_TRUE, UINT64_MAX);
+        gpu_segment_collect(s_f);
+        gpu_frame_report(s_f);
         vkResetFences(s_dev, 1, &s_f->fence);
         s_f->submitted = 0;
     }
@@ -260,6 +317,8 @@ static void frame_begin(void)
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(s_f->cb, &bi);
     s_cb = s_f->cb;
+    s_f->gpu_frame = s_frame;
+    gpu_segment_begin(s_f);
     s_cb_gen++;
     s_dyn_valid = 0;
 }
@@ -2328,6 +2387,10 @@ static int ready(void)
         s_vtrace = e ? atoi(e) : 0;
     }
     {
+        const char *e = getenv("RECOMP_VK_GPU_TIMING");
+        s_gpu_timing = e && *e == '1';
+    }
+    {
         const char *e = getenv("RECOMP_VK_DEPTH_TRACE");
         if (e && *e) {
             char *end;
@@ -2478,6 +2541,17 @@ static int ready(void)
         LOGE("no graphics queue\n");
         return 0;
     }
+    if (s_gpu_timing) {
+        s_timestamp_period = pp.limits.timestampPeriod;
+        s_timestamp_bits = qf[s_qfam].timestampValidBits;
+        if (!pp.limits.timestampComputeAndGraphics || !s_timestamp_bits || !(s_timestamp_period > 0.0f)) {
+            LOGE("GPU timestamps unavailable; RECOMP_VK_GPU_TIMING ignored\n");
+            s_gpu_timing = 0;
+        } else {
+            LOGE("GPU frame timestamps enabled (period %.3f ns, %u valid bits)\n",
+                 s_timestamp_period, s_timestamp_bits);
+        }
+    }
 
 #if defined(__SWITCH__)
     {
@@ -2591,6 +2665,15 @@ static int ready(void)
         VkSemaphoreCreateInfo sci = { VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
         VkBufferCreateInfo bci = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
         VkMemoryRequirements rq;
+        if (s_gpu_timing) {
+            VkQueryPoolCreateInfo qpi = { VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
+            qpi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+            qpi.queryCount = 2;
+            if (vkCreateQueryPool(s_dev, &qpi, NULL, &f->gpu_queries) != VK_SUCCESS) {
+                LOGE("GPU timestamp query pool creation failed; timing disabled\n");
+                s_gpu_timing = 0;
+            }
+        }
         cpi.queueFamilyIndex = s_qfam;
         vkCreateCommandPool(s_dev, &cpi, NULL, &f->pool);
         cai.commandPool = f->pool;
@@ -2667,17 +2750,20 @@ static void flush_frame_wait(void)
     VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
     end_rendering();
     s_rt = NULL;
+    gpu_segment_end(s_f);
     vkEndCommandBuffer(s_cb);
     si.commandBufferCount = 1;
     si.pCommandBuffers = &s_cb;
     vkQueueSubmit(s_queue, 1, &si, s_f->fence);
     vkWaitForFences(s_dev, 1, &s_f->fence, VK_TRUE, UINT64_MAX);
+    gpu_segment_collect(s_f);
     vkResetFences(s_dev, 1, &s_f->fence);
     garbage_free(s_f);
     s_f->ring_off = 0;
     vkResetCommandPool(s_dev, s_f->pool, 0);
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(s_cb, &bi);
+    gpu_segment_begin(s_f);
     s_cb_gen++;
     s_dyn_valid = 0;
 }
@@ -4699,6 +4785,7 @@ static void vk_flip(void)
         }
     }
     VT("flip %u: submit (image %d)\n", s_frame, have_image);
+    gpu_segment_end(s_f);
     vkEndCommandBuffer(s_cb);
     si.commandBufferCount = 1;
     si.pCommandBuffers = &s_cb;

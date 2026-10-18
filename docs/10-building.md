@@ -37,6 +37,36 @@ VULKAN=1 STAGE_GAME=0 bash switch/build.sh       # build/switch-vk -> switch_sd/
   NRO's md5: `analysis/elf_archive/conker-vulkan_<md5:8>.{elf,nro}`. Crash addresses and profiler samples are
   resolved against exactly that ELF (`nm -n`, `addr2line`).
 
+## Diagnostic profiling build for the next Windmill run
+
+The next optimization capture needs the guest CPU and renderer threads sampled together, plus the suspected
+tree insertion path instrumented. Build it into its own folder so the ordinary build remains available:
+
+```sh
+TREE_INSERT_DIAG=1 VULKAN=1 STAGE_GAME=0 BUILD_DIR=build/switch-vk-profile JOBS=2 bash switch/build.sh
+```
+
+`TREE_INSERT_DIAG=1` patches the ignored generated file for `sub_000139D0` and turns on its guarded
+fix-up-walk counters for this build. The option is off for normal builds. Archive the resulting NRO and its
+matching unstripped ELF by NRO MD5, as above.
+
+Launch through nxlink with:
+
+```sh
+ARGS='RECOMP_NX_PROFILE=2 RECOMP_VK_GPU_TIMING=1 RECOMP_WATCHDOG_SECS=60 RECOMP_WATCHDOG_KEEP=1' \
+  tools/nxlink_run.sh <switch-ip>
+```
+
+The profiler runs at 1 kHz and samples every thread that exceeds its 2% busy threshold. Each sample includes
+PC, LR, and up to five return addresses, so it covers both the guest main thread and the NV2A renderer
+executor hot path. The nxlink log records per-thread PC and caller tables every ten seconds; the full stack
+records append to `sdmc:/switch/conker/prof.bin`. `RECOMP_VK_GPU_TIMING=1` adds one GPU command-buffer
+duration per frame to the log; this separates GPU work from CPU time spent preparing commands or waiting.
+Fetch the full-stack file from the SD card after the run and analyze it against the exact archived ELF with
+`tools/prof_report.py prof.bin <elf> <log>`. The watchdog adds a guest stack snapshot if frame progress stops.
+Keep the run on the same overclock and scene route as the prior capture, and label all results as diagnostic
+rather than a speed benchmark.
+
 ## Docker build (BO1's way, not yet tried for Conker)
 
 Nothing Switch-related on the Mac; the toolchain lives in images:

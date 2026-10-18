@@ -50,6 +50,7 @@
 | `RECOMP_APU_TRACE`, `RECOMP_APU_VOICES`, `RECOMP_AUDIO_DUMP`, `RECOMP_APU_VOICE_DUMP` | audio (never judge audio from a traced run: the trace itself injects gaps) |
 | `RECOMP_NATIVE=0` / `RECOMP_NATIVE_CHECK=1` | disable / verify native replacements |
 | `RECOMP_NX_PROFILE=1\|2` | sampling profiler ([06](06-performance.md)); also `[profile]` lines in the log every 10 s: `python3 tools/prof_log_report.py LOG ELF` |
+| `RECOMP_VK_GPU_TIMING=1` | per-frame Vulkan GPU command-buffer time in `[vk-gpu]` log lines; opt-in diagnostic only |
 | `RECOMP_LINUX_PROFILE=1` | Linux bench sampler (`src/linux_prof.c`): `[profile]` per 1 s window, library code as `[profile-lib]`; `prof_log_report.py LOG build/linux-vk/conker_recomp --window-s 1` |
 | `RECOMP_AUDIO_DUMP=<path>,<start s>,<secs>` | the exact PCM sent to the device (s16 stereo 48 kHz); find noise with the first-difference/signal energy ratio per 20 ms (white noise ≈ 2) |
 | `RECOMP_APU_VOICES=1` / `RECOMP_APU_TRACE=1` | every voice seen per 5 s with format and addresses / every APU front-end method (stream segments `0x320`, `0x35C`, `0x600+`, voice on/off/pause `0x124`/`0x128`/`0x140`) |

@@ -65,6 +65,15 @@ endif()
 
 target_link_libraries(${PROJECT_NAME} PRIVATE xboxrecomp)
 
+# Optional, title-specific diagnostics around Conker's tree insertion path.
+# The corresponding generated-code markers are inserted by
+# tools/tree_insert_diag.py; this option enables their guarded code only in
+# diagnostic builds.
+option(CONKER_TREE_INSERT_DIAG "Log long tree insertion fix-up walks" OFF)
+if(CONKER_TREE_INSERT_DIAG)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE RECOMP_TREE_INSERT_DIAG=1)
+endif()
+
 # Movies: VP6 decoded by FFmpeg instead of the lifted On2 decoder
 # (src/movie_vp6.c). CONKER_FFMPEG_DIR is an install of the minimal LGPL
 # build from tools/build_ffmpeg_vp6.sh (libavcodec with only the vp6

@@ -1063,3 +1063,62 @@ build logs and commit comparison above still do not prove that the complete intr
 first iteration. The only concrete audio-path change after the initial commit is `c130f84`'s high-VA APU
 address handling; compare the stream segment/descriptor addresses across the packet completion before
 changing it or the game producer.
+
+## 2026-10-18: Docker A/B of the early APU address mapping
+
+To isolate the sound-path change in `c130f84`, the same current Linux Vulkan source and generated game code
+were built twice in the `conker-dev` image, with separate fresh save directories. The control temporarily
+used `apu_shim.h` from `c130f84^` (the mapping present around the first successful Switch build); the second
+build restored the current high-VA mapping. Each run opened `BootIntro.xmv` and dumped ten seconds of the PCM
+sent toward SDL to `run/audio-ab/pre-fix.raw` and `run/audio-ab/current.raw` respectively. Both dumps are
+1,920,000 bytes (48 kHz, stereo, signed 16-bit), and both logs show the title starting the APU.
+
+The pre-fix dump had RMS 1,813.9 and 71.0% nonzero samples in seconds 0–1, then RMS 923.4 and 25.3% nonzero
+samples in seconds 1–2. The current dump measured RMS 1,780.6 / 66.2% and 986.0 / 30.1% in those same
+windows. From seconds 2–10 both dumps contain exact zero PCM. Peaks were 7,737 in the first second and 5,000
+in the second for both. Thus both builds produce a similar short signal burst; this A/B does not identify
+whether the burst is correct music, noise, or otherwise audible. The dummy SDL output cannot be listened to
+or validated as Switch output, and its device-relative clock is not aligned to the movie's first frame.
+
+This rules out the `c130f84` address mapping as the cause of the *duration* of the Docker PCM burst: the
+cutoff is effectively unchanged. It does not rule out a difference in sample correctness for a voice backed
+by extended virtual memory. The source comparison is deliberately limited to that one APU mapping change;
+it is not a full historical rebuild of every early NRO. Docker confirms PCM signal production but cannot
+establish whether the intended soundtrack is audible or correct. For a hardware listening comparison,
+prepare these five historical checkpoints: first-success NRO `31500df5` (the NT-faithful directory-status,
+seed, and small-VMA-fallback source state at commit `52a4270`, before the APU mapping fix), source revision
+`a43804b` (black-screen investigation before the lifter correction), source revision `1bc623e`
+(black-screen fix), source revision `c130f84` (APU mapping fix as a sound-path control), and archived NRO
+`688d985e` as a later known-good reference. The first four checkpoints have no NRO in
+`analysis/elf_archive`: rebuild `52a4270`, then build the other three source revisions. The `688d985e` NRO
+and matching ELF are already archived. No Switch sound claim is made from these Docker captures.
+
+## 2026-10-18: next overclock capture prepared with stack and renderer sampling
+
+The overclocked NRO `5924ba1f` passed the earlier Windmill presentation stall but had no sampling profile.
+The new diagnostic NRO `545de116` is built and archived at
+`analysis/elf_archive/conker-vulkan_545de116.{nro,elf}`; it has the `sub_000139D0` tree instrumentation and
+the opt-in Vulkan GPU timer compiled in. Its dedicated build directory is `build/switch-vk-profile`, and the
+launch command is recorded in [10-building.md](10-building.md). The first full build compiled and linked but
+did not stage through the wrapper; the incremental rerun succeeded and staged the NRO. The first staging
+error did not recur, so its cause remains unknown.
+
+The planned launch uses `RECOMP_NX_PROFILE=2` from startup. Its 1 kHz sampler covers every thread above its
+2% busy threshold, including the renderer executor, and records PC, LR, and up to five return addresses per
+sample. The log also contains per-thread PC/caller summaries every ten seconds; full stacks append to
+`prof.bin` on the SD card. `RECOMP_VK_GPU_TIMING=1` adds the GPU command-buffer duration for each game frame,
+reported after its frame fence signals; large ring-buffer flushes are timed as segments and summed.
+`RECOMP_WATCHDOG_SECS=60 RECOMP_WATCHDOG_KEEP=1` preserves a guest stack snapshot if presentation stops.
+Together these measurements can distinguish a guest CPU loop, renderer CPU work, and GPU execution pressure.
+
+A 20-second Docker smoke run enabled `RECOMP_LINUX_PROFILE=1` and `RECOMP_VK_GPU_TIMING=1` together. It
+opened `BootIntro.xmv`, emitted 1,031 `[vk-gpu]` frame samples, and logged no crash or exception. Lavapipe's
+sample median was 9.745 ms, p95 13.064 ms, and maximum 879.896 ms, with the maximum during startup. This
+confirms that the query path reports per-frame values and coexists with CPU profiling on Linux; these are
+not Switch timing results. NRO `545de116` has not been sent to the console.
+
+Use the same overclock setting and Windmill route as the previous capture, and note the scene, entry point,
+and any point where frame progress or FPS changes. The profiler adds overhead, so this run is for diagnosis,
+not an overclocked performance benchmark. Keep draw/surface diagnostic counters off to avoid adding per-draw
+cost; the stack samples and existing hitch/thread reports provide the renderer and CPU leads needed for the
+next optimization decision.

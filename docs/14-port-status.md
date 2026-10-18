@@ -18,7 +18,9 @@ the hot functions. The tree diagnostic emitted no records at its configured thre
 does not disprove the suspected `sub_000139D0` fix-up loop. The run ended by nxlink connection reset with
 exit code 0 and no crash/exception report. It was overclocked and is not a stock performance benchmark.
 **Focus: use the capture as route and hitch evidence, pursue a narrowly measured optimization in the Linux
-container, and keep the renderer hot path active alongside the guest CPU investigation.** The container's
+container, and keep the renderer hot path active alongside the guest CPU investigation.** Diagnostic NRO
+`545de116` is built with `sub_000139D0` counters and optional per-frame GPU timestamps; its next launch will
+also enable profile-2 stack sampling and the hang watchdog. It has not been sent to hardware. The container's
 save route still cannot jump directly to Windmill; no further Switch run is available for now.
 
 **Builds:** Linux bench `build/linux-vk/conker_recomp`. Latest diagnostic Switch candidate
@@ -42,6 +44,14 @@ single-player measurement. Earlier candidates:
 `f976b53f` stalled at frame
 3,533; `3260c845` crashed in the first guard attempt; `cfd4c805` (commit a4747ae, `RECOMP_DOF=0` by default)
 was the build before the crash guard.
+
+**Prepared next diagnostic build:** `analysis/elf_archive/conker-vulkan_545de116.{nro,elf}` (NRO MD5
+`545de116f420fcd449a26f576a768d0b`), staged at `switch_sd/switch/conker/conker-vulkan.nro`. It includes
+tree-insert counters and optional Vulkan GPU timestamps. Launch with
+`RECOMP_NX_PROFILE=2 RECOMP_VK_GPU_TIMING=1 RECOMP_WATCHDOG_SECS=60 RECOMP_WATCHDOG_KEEP=1`; the CPU sampler
+captures renderer callers and stack return addresses, and the GPU timer reports per-frame command-buffer
+duration. Docker confirmed the timer emits values alongside the Linux CPU profile. No Switch data is available
+for this NRO yet.
 
 **Latest hardware capture (2026-10-18, profile-2 NRO `e037bd66`, `run/net_logs/20261018-022626.log`):**
 loaded Windmill and reached frame 2,831. Frames 2,830–2,831 took 1,902 and 2,086 ms, with 1,254 and
@@ -323,15 +333,23 @@ and say how.
     `BootIntro.xmv`, but has no shared timestamp tying its first frame to the audio sample clock.
   - The early Switch logs show APU initialization and the movie file opening, not a measured soundtrack.
     The user's recollection of sound during early builds with a black front end remains a useful lead. The
-    initial renderer failure and the guest XMV/DirectSound producer are separate paths. The only concrete
-    audio code change since the first boot is `c130f84`'s high-VA address mapping, which should be compared
-    against the intro stream segment addresses.
+    initial renderer failure and the guest XMV/DirectSound producer are separate paths. Docker PCM A/B of
+    the pre-`c130f84` and current APU address mapping produced similar nonzero samples for two seconds and
+    exact zero for seconds 2–10 in both captures. This says the VA mapping does not explain the cutoff
+    duration in this headless route; it cannot verify soundtrack identity, audio quality, or Switch audibility.
+    The selected hardware checkpoints are `31500df5` (first successful run), `a43804b` (pre-lifter-fix
+    investigation), `1bc623e` (black-scene fix), `c130f84` (high-VA APU fix), and archived `688d985e` as a
+    later known-good reference. The first-success NRO `31500df5` (source state `52a4270`) and builds from
+    revisions `a43804b`, `1bc623e`, and `c130f84` are absent from the local archive and need rebuilding;
+    `688d985e` and its matching ELF are already archived. Docker PCM confirms only a short signal burst, not
+    audible or correct Switch music.
   - The earlier shader/pipeline-stall explanation is unconfirmed: Linux traces show long early frames with
     zero shader compilations and about 2 ms spent uploading three textures. The configured cache path did not
     resolve the audio cutoff.
-  - Fix/next: unresolved; no safe audio change identified. Correlate PCM time with video start, then trace
-    the four voices' segment addresses and queue state through the first completion to find why no packet
-    follows packet two. See the 2026-10-18 review in [09-bringup-log.md](09-bringup-log.md).
+  - Fix/next: unresolved; no safe audio change identified. On a later Switch session, listen to the selected
+    archived/rebuilt checkpoints and correlate PCM time with video start. Then trace the four voices' segment
+    addresses and queue state through the first completion to find why no packet follows packet two. See the
+    2026-10-18 review in [09-bringup-log.md](09-bringup-log.md).
 - [ ] **Intro movie is widened to gameplay aspect** (4:3 source; NRO `3260c845`, Switch verification pending).
   - Cause: the present path expands 640×480 title content to 16:9 when widescreen is enabled.
   - Fix: both GL and Vulkan now detect the XMV's 640×480 YUY2/UYVY texture (`0x24`/`0x25`, pitch 1280)

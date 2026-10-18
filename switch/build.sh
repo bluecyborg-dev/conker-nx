@@ -26,6 +26,8 @@
 #                    BUILD_DIR gets a -lto suffix and the NRO is staged as
 #                    conker[-vulkan]-lto.nro next to the normal one, for A/B.
 #                    LTO_JOBS parallel link jobs (default 4, ~2 GB each)
+#   TREE_INSERT_DIAG=1 instrument Conker's sub_000139D0 fix-up walk and compile
+#                    its counters into this diagnostic build (off by default)
 #   FFMPEG_DIR       VP6-only LGPL FFmpeg for the movies (tools/build_ffmpeg_vp6.sh
 #                    switch; default $REPO/deps/ffmpeg-vp6-switch). Without
 #                    it the lifted (slow) decoder plays them.
@@ -58,6 +60,17 @@ if [ "${LTO:-0}" = "1" ]; then
     LTO_ARGS=(-DCONKER_LTO=ON -DCONKER_LTO_JOBS="${LTO_JOBS:-4}")
 fi
 
+# The optional generated-code instrumentation is useful with the Switch
+# sampling profiler when investigating Conker's Windmill stall. Keep it off
+# for ordinary builds; tree_insert_diag.py only adds guarded diagnostic code.
+TREE_ARGS=(-DCONKER_TREE_INSERT_DIAG=OFF)
+if [ "${TREE_INSERT_DIAG:-0}" = "1" ]; then
+    PY="${PYTHON:-python3}"
+    [ -x "$REPO/.venv/bin/python" ] && PY="$REPO/.venv/bin/python"
+    "$PY" "$REPO/tools/tree_insert_diag.py" "$GEN"
+    TREE_ARGS=(-DCONKER_TREE_INSERT_DIAG=ON)
+fi
+
 FFMPEG_DIR="${FFMPEG_DIR:-$REPO/deps/ffmpeg-vp6-switch}"
 if [ -f "$FFMPEG_DIR/lib/libavcodec.a" ]; then
     FF_ARGS=(-DCONKER_FFMPEG_DIR="$FFMPEG_DIR")
@@ -86,7 +99,7 @@ cmake -S "$REPO" -B "$BUILD" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DXBOXRECOMP_DIR="$TK" -DCONKER_GEN_DIR="$GEN" \
     "${VK_ARGS[@]}" "${FF_ARGS[@]}" \
-    "${LTO_ARGS[@]}" >/dev/null
+    "${LTO_ARGS[@]}" "${TREE_ARGS[@]}" >/dev/null
 ninja -C "$BUILD" -j"$JOBS"
 
 DEST="$SD/switch/conker"

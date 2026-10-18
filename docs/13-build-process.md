@@ -92,6 +92,25 @@ The expected symbol address is zero. Keep the NRO and its exact unstripped ELF t
 build so exception and profiler addresses can be resolved against the right binary. The archive convention
 is `analysis/elf_archive/conker-vulkan_<md5:8>.{elf,nro}`; see [10-building.md](10-building.md).
 
+For the next Windmill diagnostic capture, build the instrumented NRO separately:
+
+```sh
+TREE_INSERT_DIAG=1 VULKAN=1 STAGE_GAME=0 BUILD_DIR=build/switch-vk-profile JOBS=2 bash switch/build.sh
+```
+
+Then launch it with the 1 kHz all-busy-thread sampler and hang watchdog enabled:
+
+```sh
+ARGS='RECOMP_NX_PROFILE=2 RECOMP_VK_GPU_TIMING=1 RECOMP_WATCHDOG_SECS=60 RECOMP_WATCHDOG_KEEP=1' \
+  tools/nxlink_run.sh <switch-ip>
+```
+
+Profile mode 2 records PC, caller, and five return-address slots for each sampled busy thread, including the
+renderer executor. The log supplies per-thread function/caller summaries; the full stack records are written
+to `sdmc:/switch/conker/prof.bin` and should be copied off the card after the run. `RECOMP_VK_GPU_TIMING=1`
+logs GPU command-buffer time per frame, allowing hitches to be compared with actual GPU execution. Analyze
+the stack file against the exact archived ELF with `tools/prof_report.py`.
+
 ## 5. Upload and observe the console run
 
 On the Switch, start Homebrew Menu with title takeover by holding **R** while launching a game, then press
