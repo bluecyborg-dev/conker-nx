@@ -1172,6 +1172,57 @@ crash was logged. Frame 3 took 3,203 ms with zero shader compiles and 1.7 MB of 
 The runtime detected that `sys-clk` is running and explicitly ignored the `CONKER_*_MHZ` requests, leaving
 clock control to its profile. This avoids competing with sys-clk. It verifies the service is active, but the
 log does not report the selected profile or the actual CPU/GPU/memory frequencies; the user's statement that
-the console is overclocked is not independently confirmed by MHz readback. The capture remains in progress.
-Continue the prior overclocked Windmill route, then preserve the final log and retrieve `prof.bin` from the
-SD card for full stack-sample analysis.
+the console is overclocked is not independently confirmed by MHz readback. At that interim check the run was
+still active; its final outcome is recorded below.
+
+## 2026-10-19: diagnostic run reached Windmill twice and froze in MPBeach
+
+The completed run used the same `545de116` NRO and log. Its route was `Frontend` → `Windmill` → `Hell` →
+`Windmill` → `Frontend` → `Mp_Frontend` → `MPBeach`. It recorded two Windmill visits before the user-reported
+multiplayer freeze. The final GPU timestamp was frame 15,085 at 7.299 ms. After that, the log reported
+0.0 FPS and 0.0 Hz vblank; the watchdog confirmed no frame presented for 20 seconds and still none after
+40 seconds. The host nxlink stream ended with `recv: Connection reset by peer` and `exiting ...`; there is
+no `[CRASH]`, exception, or explicit process-crash report.
+
+The stall coincided with repeated `[PB] NOP(237) trap still pending after 2 s (PMC_INTR 00001000 EN 00000001)`
+messages. Four `[PB] FLIP_STALL` reports preceded the stop. The watchdog also recorded a thread waiting on
+guest lock `0x004E1674`, held by thread 0; its holder had entered at guest address `0x004C38D8`. The lock
+diagnostic showed five outstanding enters. Around the same point OHCI0 reported `guest IRQL never dropped
+(depth 2); delivering anyway`. These overlapping synchronization signals make a PGRAPH/guest-lock/interrupt
+interaction the leading diagnostic area; they do not yet establish which event caused the freeze.
+
+The watchdog snapshot's saved guest stack includes return site `0x004CB0D2` in `sub_004CB0BD`, a generated
+function categorized as `game_audio`. That function contains an APU MMIO polling loop at `0x004CB0EC`, and
+the last guest indirect-call targets repeatedly include `0x00554CD4`, `0x00554C9E`, and `0x00554C76`, also
+in game-audio code. The watchdog does not report the guest instruction pointer, so the stack is a lead rather
+than proof that the APU polling loop was the active instruction. Meanwhile the APU stayed at 1,500 frames/s,
+with zero queue underruns, drops, or device gaps; audio output continued to be paced during the missing
+video frames. The log reported repeated profile flushes to the intended `sdmc:/switch/conker/prof.bin`
+path, but that binary has not been copied to or independently verified on the host; the streamed log is the
+analyzed artifact so far.
+
+The log also gives a useful comparison for the Windmill hitches. The first visit logged 54 frames of at least
+50 ms (30 at least 100 ms); 51 had no shader compile or texture upload. The second logged 78 such frames
+(17 at least 100 ms); 74 had no shader compile or texture upload. For those hitch frames, the closest
+available per-frame GPU timestamps (same frame or an adjacent frame because query results are asynchronous)
+had medians of 7.214 ms and 9.145 ms for the two visits, with maxima of 9.530 ms and 10.196 ms. Two of the
+78 second-visit samples exceeded 10 ms, and none exceeded 16.67 ms. This points away from shader/texture
+work or GPU command-buffer execution as the
+primary cost in most Windmill hitches, and toward guest CPU, renderer CPU, synchronization, or waits. GPU
+timestamps do not measure CPU recording, presentation delay, or all waits, so they do not by themselves
+identify the cause.
+
+The user identified the Windmill event as a worm emerging from the ground and retreating after the player
+moves away. The user associates the same spot with the earlier crash, the later freeze, and the current FPS
+drops. This is a useful reproduction marker for the next capture. Although this diagnostic run loaded
+Windmill twice, its log has no worm-state or player-position marker, so its hitch records cannot yet be aligned
+to emergence or retreat. The profile summary across both Windmill visits names `memcmp`, `memmove`,
+`nv2a_pb_exec_method`, and `nv2a_pb_scan` in the executor, but those aggregate sample shares are not
+per-hitch CPU times and do not tie those functions to the worm event.
+
+The session confirms a real presentation freeze in multiplayer and narrows the Windmill hitches away from
+measured GPU saturation. Keep the two issues separate: the MPBeach stop has PGRAPH NOP, guest-lock and OHCI
+IRQL evidence, while the Windmill hitch trigger still needs event-aligned CPU and renderer attribution. The
+runtime confirmed `sys-clk` was active but did not read back its selected profile or actual frequencies, so
+this diagnostic capture is not a verified overclock benchmark. See [14-port-status.md](14-port-status.md)
+and [16-optimization-plan.md](16-optimization-plan.md) for current priorities.

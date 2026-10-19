@@ -1,11 +1,14 @@
 # Conker optimization plan
 
-**Status (2026-10-18):** the cache-on/cache-off Windmill comparison on `e037bd66` reduced 3,072-byte
-constant-block copies but did not confirm an FPS gain. A later profile-2 run stopped presenting at frame 2,831
-with the game thread busy in `sub_000139D0`; the final overclocked diagnostic run `5924ba1f` passed that
-frame and reached MPBeach, but lacked sampling profiling. It recorded repeated no-shader/no-texture Windmill
-hitches. Keep the guest routine and renderer hot path as separate leads; the current Docker save route does
-not reach Windmill.
+**Status (2026-10-19):** the cache-on/cache-off Windmill comparison on `e037bd66` reduced 3,072-byte
+constant-block copies but did not confirm an FPS gain. The profile-2/GPU-timing capture on `545de116`
+visited Windmill twice, then stopped presenting in MPBeach after frame 15,085. It recorded a pending PGRAPH
+NOP, a guest-lock waiter, and OHCI guest IRQL stuck at depth 2, with no crash or exception report. The user's
+Windmill marker is a worm emerging from the ground and retreating when the player moves away. Most Windmill
+hitches had no shader or texture work and the nearest GPU command-buffer samples reached at most 10.196 ms
+(none exceeded 16.67 ms), narrowing the search to guest/renderer CPU work or synchronization while leaving
+the exact worm-triggered function unidentified. Keep the multiplayer synchronization issue separate from the
+Windmill hitch investigation.
 
 This plan focuses on the reported gameplay slowdown near the former recursive-search freeze point, then uses measured results to improve frame pacing elsewhere. It follows the measurement and A/B methods in the port guide's `03-switch-performance.md` and Conker case study `platforms/xbox/conker/source-notes/06-performance.md`.
 
@@ -35,15 +38,15 @@ This plan focuses on the reported gameplay slowdown near the former recursive-se
 | The cache-on and cache-off runs of the same `e037bd66` NRO are complete (`021534.log` and `021920.log`). Cache-on reused 44–64% of blocks; cache-off had zero reuse and more copies. | The cache prevents repeated 3,072-byte copies when its generation and command-buffer-slot conditions match. | One run per setting is not enough to distinguish a small gain from run-to-run variation. The FPS ranges overlap, and long hitches persisted in both modes; no frame-rate benefit is demonstrated. |
 | Profile-2 `e037bd66` (`run/net_logs/20261018-022626.log`) loaded Windmill, then frames 2,830–2,831 took 1,902 and 2,086 ms. Presentation fell to 0 FPS/vblank; `game:0` stayed at 98–100% of one core. In late windows, 75.1% of main-thread sampled PCs mapped to `sub_000139D0`. | The immediate black-screen stall is associated with guest CPU work. Source inspection suggests a tree insert/rebalance routine; its parent-link fix-up loop is a concrete lead. | The profile does not prove a corrupt/cyclic tree or distinguish one long call from a high call volume. There is no exception, pending NOP, raw `prof.bin`, exact event marker, or GPU timing. |
 | Overclocked diagnostic NRO `5924ba1f` (`run/net_logs/20261018-030841.log`) passed Windmill frame 2,831, reached at least frame 6,903 there, then loaded Frontend and MPBeach through frame 14,282. Windmill recorded 95 hitches of at least 50 ms; 90 had no shader compilation or texture upload. The whole run had 444 hitches; MPBeach frame 11,968 took 3,570 ms, including 2,069 ms compiling 20 programs. | The earlier presentation stop did not recur on this route; Windmill retains substantial no-resource frame hitches and MPBeach has both compile-bound and unexplained stalls. Audio remained paced. | No `RECOMP_NX_PROFILE=2` was passed and no tree diagnostic crossed its logging thresholds. Overclocked timing is not a stock baseline; no GPU timers or function samples identify the no-resource hitches. The run ended on nxlink reset with exit code 0. |
-| Prepared diagnostic NRO `545de116` combines the tree-insert instrumentation, profile-2 stack sampling at launch, and `RECOMP_VK_GPU_TIMING=1` per-frame GPU timestamps. A 20-second Linux smoke run emitted 1,031 GPU samples and CPU profile windows without a crash. | The next hardware capture can compare guest and renderer CPU samples, guest tree-walk counts, GPU command-buffer duration, frame hitches, and watchdog stacks in one session. | The Switch has not run this NRO. Lavapipe timing is only a code-path check; profile-2 and extra per-frame logs change timing, so the capture is diagnostic, not a benchmark. |
+| Profile-2/GPU-timing NRO `545de116` (`run/net_logs/20261019-012749.log`) loaded Windmill twice, logged 132 hitches of at least 50 ms (125 without shader compilation or texture uploads), then froze in MPBeach after GPU frame 15,085 at 7.299 ms. The watchdog saw no frame after 20 and 40 seconds; NOP 237 remained pending, a thread waited on guest lock `0x004E1674`, and OHCI0 reported guest IRQL depth 2. | The nearest Windmill GPU command-buffer samples had medians of 7.214 and 9.145 ms and maxima of 9.530 and 10.196 ms; none exceeded 16.67 ms. This weakens GPU saturation as an explanation for the long hitches. The multiplayer freeze now has concrete PGRAPH, guest-lock, and OHCI synchronization evidence. | GPU timing is asynchronous and excludes CPU recording, presentation delay, and other waits. The Windmill worm event is not marked per frame; profile summaries aggregate windows and do not prove a hot function at that event. The log reported profile flushes to `sdmc:/switch/conker/prof.bin`, but that binary is not on the host and was not independently verified. `sys-clk` was active, but actual clocks were not read back. The run is instrumented and diagnostic, not a benchmark. |
 | A copy-on-write clone of `run/save` in `conker-dev` reached TrainingLevel; the chapter selector did not allow a direct Windmill jump. | The container can validate boot, save loading, and early gameplay. | It did not reproduce the Windmill stall. Lavapipe timing is not Switch performance evidence. |
 | Two 60-second Docker cache A/B runs used independent `run/live/save` copies and the same profiled Linux Vulkan build. Both opened `BootIntro.xmv` and settled at 59.9–60.0 FPS; each 300-frame window copied 3,000 blocks and reused none. | This front-end route does not exercise the cache; the Switch Windmill reuse counters remain the relevant evidence for copy savings. | `RECOMP_LINUX_PROFILE=1` adds overhead, lavapipe reached its vblank limit, and the route does not reach Windmill; no optimization speedup can be inferred. |
 | A 10-second `RECOMP_AUDIO_DUMP` from a separate Docker start recorded nonzero PCM only from 0.30–1.40 seconds after audio-device startup, followed by exact zero PCM to 10 seconds. A pre/post-`c130f84` address-mapping A/B showed similar nonzero signal through seconds 0–2, then exact zero through seconds 2–10 in both builds. | The current Linux route reproduces a short audio burst followed by silence. The high-VA mapping change does not explain the burst duration in this route. | No timestamp ties movie frame zero to the sample clock; dummy SDL output cannot establish audibility, soundtrack identity, signal quality, or precise intro-relative cutoff. |
 | The current Switch `[perf]` report includes FPS, APU pacing, per-thread CPU use and waits. `[hitch]` reports frames over 50 ms with shader compilation, texture uploads, and draw count. | We can begin with existing runtime diagnostics. | These logs do not report per-pass GPU execution time or a full per-frame histogram. The CPU sampler measures CPU PCs; it is not a GPU profiler. |
 
-The former freeze fix around `sub_00354610` / `sub_00355B40` remains a correctness change, and its runtime cost is still unmeasured. The previous 433 ms frame must not be used as evidence that this path is still expensive. Renderer CPU work remains part of this plan: the measured leads include pushbuffer scan, method dispatch, state comparison, Vulkan recording, and avoidable constant-block copies. The cache has demonstrated fewer copies, but not a Switch frame-time improvement. The latest black-screen capture points first to guest work in `sub_000139D0`; diagnose that stall separately before changing renderer behavior.
+The former freeze fix around `sub_00354610` / `sub_00355B40` remains a correctness change, and its runtime cost is still unmeasured. The previous 433 ms frame must not be used as evidence that this path is still expensive. The earlier frame-2,831 Windmill stop pointed to guest work in `sub_000139D0`; the new multiplayer stop has different synchronization evidence and should be diagnosed separately. Renderer CPU work remains part of this plan: measured leads include pushbuffer scan, method dispatch, state comparison, Vulkan recording, and avoidable constant-block copies. The cache has demonstrated fewer copies, but not a Switch frame-time improvement.
 
-The multiplayer captures show CPU pressure on `Mp_Frontend` / `MPBeach`, while the profile-2 and cache runs reach Windmill. In the sampled routes, `game:0` and the NV2A executor each use a large share of one core, and the process reports core mask `0x7`. The game still serializes guest code under `RECOMP_GIL`; logs do not say which physical core ran each thread. Executor caller samples point toward `nv2a_pb_scan` and draw-state calls, while sampled PCs also include wait/yield paths. The profile-2 stall capture concentrated game-main samples in `sub_000139D0`, while the later overclocked run passed the same frame without sampling. Neither result clears the renderer from the sustained no-resource hitch investigation. Do not change affinity or remove the guest lock based on these samples. GPU execution time remains unmeasured.
+The multiplayer captures show CPU pressure on `Mp_Frontend` / `MPBeach`, while the profile-2 and cache runs reach Windmill. In the sampled routes, `game:0` and the NV2A executor each use a large share of one core, and the process reports core mask `0x7`. The game still serializes guest code under `RECOMP_GIL`; logs do not say which physical core ran each thread. Executor caller samples point toward `nv2a_pb_scan` and draw-state calls, while sampled PCs also include wait/yield paths. The `545de116` profile summaries during Windmill show `memcmp`, `memmove`, `nv2a_pb_exec_method`, and `nv2a_pb_scan`, but their shares are not CPU-time shares and are not aligned to the worm event. GPU command-buffer timing is now available: nearest-frame values around Windmill hitches reached at most 10.196 ms, with none above 16.67 ms. This argues against GPU execution as the dominant cost for those frames, but does not measure CPU recording, presentation waits, or all synchronization. Do not change affinity or remove the guest lock based on these samples.
 
 ## Measurement rules
 
@@ -163,7 +166,10 @@ For each performance change:
 
 Once the local dip is controlled, repeat profiling in the previously measured TrainingLevel and Windmill workloads. Use those results to prioritize broader headroom and evaluate the 60 FPS stretch target without sacrificing the current presentation quality.
 
-## Immediate next action
+## Previous next-action plan (recorded before the 2026-10-19 capture)
+
+The following steps describe the plan before NRO `545de116` was run. The current follow-up is recorded at
+the end of this file.
 
 The final overclocked capture `5924ba1f` (`run/net_logs/20261018-030841.log`) passed the earlier Windmill
 presentation stall and reached `MPBeach`, but it was built without `RECOMP_NX_PROFILE=2`. It therefore
@@ -207,3 +213,35 @@ if it recurs, capture the acknowledgement together with guest lock `0x004E1674` 
 Do not change thread affinity or guest locking until the synchronization path is understood. Add calibrated
 GPU timing if CPU evidence still does not isolate the critical path.
 Record the resulting evidence and any resolved issue in [09-bringup-log.md](09-bringup-log.md), and keep [14-port-status.md](14-port-status.md) aligned with the current priority. This plan is specific to `conker-nx` and is not copied into the port guide.
+
+## Immediate next action (2026-10-19)
+
+Keep the game running as the first priority. The recent capture narrows the Windmill hitches and exposes a
+multiplayer synchronization stall, but it does not prove either root cause. Do not change the recursive walk,
+renderer, thread affinity, or guest lock based on aggregate profile shares.
+
+1. If the Switch SD card still has `sdmc:/switch/conker/prof.bin`, copy it to the host and analyze it with
+   the exact archived ELF, `analysis/elf_archive/conker-vulkan_545de116.elf`, using
+   `tools/prof_report.py`. Keep the original log and binary together; the streamed text summaries are
+   aggregate windows and not per-hitch attribution.
+2. For the MPBeach freeze, trace PGRAPH NOP 237 and its `PMC_INTR=0x1000` acknowledgement alongside the
+   guest-lock waiter/holder (`0x004E1674`, acquisition call site `0x004C38D8`) and OHCI0's stuck guest IRQL.
+   The watchdog's saved stack includes return site `0x004CB0D2` in `sub_004CB0BD` (game-audio code), which
+   contains an APU MMIO polling loop at `0x004CB0EC`; the watchdog did not provide the guest PC, so verify
+   this lead before changing audio or synchronization behavior. APU output remained paced and reported no
+   underruns, gaps, or dropped buffers.
+3. For Windmill, mark when the worm emerges, how long it remains visible, when it starts retreating, and
+   when the player moves away. Align those moments with frame IDs, draw/resource counts, CPU samples, and
+   adjacent GPU timestamps. The two logged Windmill visits contained 132 hitches of at least 50 ms, 125
+   without shader or texture work; nearest-frame GPU command-buffer values reached at most 10.196 ms, with
+   none above 16.67 ms. This makes GPU
+   execution or resource preparation unlikely explanations for most of these hitches, while guest CPU,
+   renderer CPU, scheduling, and waits remain open.
+4. Treat `545de116` as a diagnostic run, not an FPS benchmark. The profile-2 sampler and GPU timestamps add
+   overhead, and sys-clk's active profile/frequencies were not read back. Record the selected profile and
+   actual clocks before any scored comparison. Do not reduce texture quality or make a permanent resolution
+   change to address these symptoms.
+
+Use Docker for source-level inspection or correctness checks; the current container save route cannot jump
+directly to Windmill. Keep MPBeach freeze diagnosis and worm-triggered Windmill hitch diagnosis separate in
+the logs until a capture links them to the same subsystem.
