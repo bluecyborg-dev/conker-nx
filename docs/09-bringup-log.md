@@ -1276,3 +1276,46 @@ pair is archived at `analysis/elf_archive/conker-vulkan_bc1df101.{nro,elf}`. The
 the Switch. Launch it with profile-2 sampling, GPU timestamps, watchdog retention, and
 `RECOMP_PGRAPH_TRACE=1`; the next investigation remains the MPBeach NOP/guest-lock/OHCI freeze, with Windmill
 worm hitches priority 2.
+
+## 2026-10-19: intro-audio regression checkpoints rebuilt
+
+Revisited the first explicit report that the intro soundtrack stopped in under a second. The last hardware
+run before that report used historical NRO `3f85b158`, logged in
+`run/net_logs/20261017-020541.log`; its source state is commit `d386a80`. The original NRO was absent. Rebuilt
+that source state in an isolated worktree with its historical regeneration scripts. The rebuilt NRO is
+`analysis/elf_archive/conker-vulkan_a79ad501.nro`, MD5
+`a79ad50102c5803db4f0c0e4e7b7b1f7`, size 77,093,061 bytes. Its matching unstripped ELF is
+`analysis/elf_archive/conker-vulkan_a79ad501.elf`, MD5 `379c5682e0b5d1775cadb3727cba086b`. The reconstructed
+NRO size matches the historical transfer size, but its hash differs, so it is a source-state reconstruction,
+not the original binary. The pre-report log records `[APU]` startup and `BootIntro.xmv` open, with no audio
+sample measurement; it does not prove that this exact run had audible sound.
+
+The first explicit failing report was on historical NRO `e807fd88`, in
+`run/net_logs/20261017-064742.log`; its last source commit before the run is `66ef96c`. The original NRO was
+also absent. Commit `66ef96c` itself adds 35 hidden-function seeds, the in-log profiler summary, and
+`prof_log_report.py`; it contains no audio implementation changes. The wider source interval from
+`d386a80` to `66ef96c` is not a single-change comparison: it includes renderer work and commit `1bc623e`,
+which implements `fincstp`/`fdecstp` in the lifter, as well as seed and profiler changes. There are no APU,
+DirectSound, or XMV implementation edits in that interval. Rebuilt the report source state as
+`analysis/elf_archive/conker-vulkan_c0be5d71.nro`, MD5
+`c0be5d71fa479abaece255c55d5ebb39`, size 77,187,269 bytes; matching unstripped ELF
+`analysis/elf_archive/conker-vulkan_c0be5d71.elf`, MD5 `e2ee5a9ac4bcea6bfdd1717cabe06233`. The build linked
+both artifacts, but the staging copy ran out of disk space; the completed NRO was archived and its ELF
+hard-linked into the archive, then both hashes were verified. This is a reconstruction, not original
+historical binary `e807fd88`.
+
+For a direct library-code check, regenerated the guest bodies for all 485 DSOUND and 84 XMV functions in the
+confirmed-audio source state `52a4270` and in both checkpoint states. The generated bodies are byte-identical
+across all three. This rules out a changed translated DSOUND/XMV function body as the direct regression in
+this source range, but not changes in game `.text`, caller state, scheduling, timing, or runtime interactions.
+The confirmed-audio control is `analysis/elf_archive/conker-vulkan_6d26ed5d.nro` from `52a4270`; the user
+confirmed both the intro picture and audio on that reconstructed checkpoint.
+
+In the report log, the first `[perf] audio out` summary has peak `16810`; the next three summaries have peak
+zero, and later gameplay summaries become nonzero again. The report also shows no device gaps, underruns, or
+dropped buffers. This corroborates brief audio output followed by silence, without locating the exact cutoff.
+The previous shader/pipeline-stall explanation is still only a hypothesis: later Linux captures reproduce
+the PCM cutoff with no shader compilations. The two new reconstructed NROs have not yet been played on
+hardware. Next, A/B `a79ad501` and `c0be5d71` on the Switch, using confirmed-audio `6d26ed5d` as the positive
+control, and record whether and when the intro soundtrack stops. No audio code was changed based on this
+comparison.

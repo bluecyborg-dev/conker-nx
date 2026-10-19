@@ -23,6 +23,13 @@ investigation. The container's save route still cannot jump directly to Windmill
 first-success checkpoint `6d26ed5d` has now launched on the Switch; the user confirms its intro video and
 audio both play correctly.
 
+**Current focus (2026-10-19): isolate the intro movie audio loss.** The first explicit failing report is
+bounded by a pre-report Switch run (`3f85b158`, source state `d386a80`) and the report run (`e807fd88`, source
+state `66ef96c`). The original NRO files are absent, so both have been rebuilt from their source states and
+archived as reconstructions. The positive control remains `6d26ed5d` from `52a4270`, which the user confirmed
+plays both the picture and sound. Compare the two adjacent reconstructions on hardware before changing audio
+code. See the new 2026-10-19 entry in [09-bringup-log.md](09-bringup-log.md).
+
 The profile-2/GPU-timing NRO `545de116` was sent to hardware. At the interim check the log had reached at
 least frame 595 without a crash; the final capture is recorded below. The runtime confirmed `sys-clk` was
 active and ignored the `CONKER_*_MHZ` requests, but did not report its selected profile or actual frequencies.
@@ -44,13 +51,12 @@ renderer CPU, or synchronization/wait costs. The user identified the recurring l
 from the ground and retreating when the player moves away. The log does not mark the worm state, so the
 measured hitches cannot yet be tied to that transition.
 
-**Priority 1: restore reliable multiplayer presentation.** Trace the MPBeach PGRAPH NOP, guest-lock waiter,
-and OHCI IRQL hold to the stage that stops progressing before changing synchronization code. Retrieve and
-resolve `prof.bin` against the matching ELF if it remains available.
-
-**Priority 2: investigate the Windmill worm hitches.** Mark emergence, visible time, retreat, and player
-distance in a repeatable route, then compare event-aligned guest CPU, renderer CPU, and wait data. Keep the
-renderer hot path and guest CPU as separate measured leads; do not treat this instrumented run as a benchmark.
+**Priority 1: compare the intro-audio checkpoints on hardware.** First test the rebuilt pre-report NRO
+`a79ad501`, then the rebuilt report-state NRO `c0be5d71`, keeping the already confirmed-audio
+`6d26ed5d` available as a positive control. Record whether the music plays and when it stops for each. These
+are source-state reconstructions, not the missing original binaries. The MPBeach PGRAPH/guest-lock/OHCI
+freeze and Windmill worm hitches remain open, deferred investigations; retain their existing evidence and
+do not change synchronization or renderer code during this audio comparison.
 
 **Builds:** Linux bench `build/linux-vk/conker_recomp`. New PGRAPH-trace Switch candidate
 `analysis/elf_archive/conker-vulkan_bc1df101.{nro,elf}` (NRO MD5 `bc1df1013c9a2f2bd266648b462438d5`,
@@ -425,10 +431,32 @@ and say how.
   - The earlier shader/pipeline-stall explanation is unconfirmed: Linux traces show long early frames with
     zero shader compilations and about 2 ms spent uploading three textures. The configured cache path did not
     resolve the audio cutoff.
-  - Fix/next: unresolved for later/current builds; no safe audio change identified. Compare the current build
-    with the confirmed-audio source checkpoint `6d26ed5d`, then trace the four voices' segment addresses and
-    queue state through the first completion to find why no packet follows packet two. See the
-    2026-10-18 review in [09-bringup-log.md](09-bringup-log.md).
+  - Source/build comparison (2026-10-19): the original binaries for the last pre-report run (`3f85b158`,
+    log `run/net_logs/20261017-020541.log`) and first explicit failing run (`e807fd88`,
+    `run/net_logs/20261017-064742.log`) were absent. Their source states have been reconstructed and archived:
+    pre-report `d386a80` → `analysis/elf_archive/conker-vulkan_a79ad501.{nro,elf}` (NRO MD5
+    `a79ad50102c5803db4f0c0e4e7b7b1f7`); report state `66ef96c` →
+    `analysis/elf_archive/conker-vulkan_c0be5d71.{nro,elf}` (NRO MD5
+    `c0be5d71fa479abaece255c55d5ebb39`). The positive control is the user-confirmed audio checkpoint
+    `analysis/elf_archive/conker-vulkan_6d26ed5d.nro` from `52a4270`. None of these two new reconstructions
+    has yet been tested on hardware.
+  - The report-state commit `66ef96c` adds hidden-function seeds and profiling/reporting only. The full source
+    interval from `d386a80` to `66ef96c` also contains renderer changes and the `fincstp`/`fdecstp` lifter
+    correction (`1bc623e`), but no APU, DirectSound, or XMV implementation edits. Regenerated C bodies for
+    all 485 DSOUND and 84 XMV functions are byte-identical across the confirmed-audio state `52a4270`,
+    pre-report `d386a80`, and report state `66ef96c`. This rules out changes to those translated library
+    bodies as the direct regression; changed game-side callers/state, scheduling, timing, and runtime behavior
+    remain possible.
+  - The pre-report log records APU startup and opening `BootIntro.xmv`, but no audio signal measurement; it
+    does not establish that this exact build played sound. The report log's first `[perf] audio out` peak was
+    `16810`, then the next three peaks were zero, with nonzero peaks later in gameplay. This supports brief
+    intro output followed by silence, but does not timestamp the precise cutoff. The log showed no device
+    gaps, underruns, or dropped buffers. Docker PCM and earlier cache tests do not prove Switch audibility.
+  - Fix/next: unresolved. A/B `a79ad501` and `c0be5d71` on the Switch, with `6d26ed5d` as the confirmed-audio
+    control. If they reproduce the boundary, trace the four voices' segment addresses, queue state, and
+    completion/refill sequence. The earlier first-frame shader-stall explanation remains an unproven
+    hypothesis; later Linux traces captured the cutoff without shader compiles. See the 2026-10-19 entry in
+    [09-bringup-log.md](09-bringup-log.md).
 - [ ] **Intro movie is widened to gameplay aspect** (4:3 source; NRO `3260c845`, Switch verification pending).
   - Cause: the present path expands 640×480 title content to 16:9 when widescreen is enabled.
   - Fix: both GL and Vulkan now detect the XMV's 640×480 YUY2/UYVY texture (`0x24`/`0x25`, pitch 1280)
