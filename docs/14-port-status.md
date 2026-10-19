@@ -19,11 +19,14 @@ does not disprove the suspected `sub_000139D0` fix-up loop. The run ended by nxl
 exit code 0 and no crash/exception report. It was overclocked and is not a stock performance benchmark.
 **Focus: use the capture as route and hitch evidence, pursue a narrowly measured optimization in the Linux
 container, and keep the renderer hot path active alongside the guest CPU investigation.** Diagnostic NRO
-`545de116` is built with `sub_000139D0` counters and optional per-frame GPU timestamps; its next launch will
-also enable profile-2 stack sampling and the hang watchdog. It has not been sent to hardware. The container's
-save route still cannot jump directly to Windmill. The reconstructed first-success checkpoint `6d26ed5d`
-has now launched on the Switch; the user confirms its intro video and audio both play correctly. The
-diagnostic optimization NRO `545de116` remains unsent.
+`545de116` has now been sent to hardware; its 2026-10-19 profile-2 capture is in progress in
+`run/net_logs/20261019-012749.log`. The log confirms profile-2 sampling, per-frame GPU timestamps, the
+watchdog arguments, and a live `sys-clk` service. Conker left clock control to sys-clk; the log does not
+report its active MHz or prove that its selected profile is overclocked. The title reached at least frame 595
+without a logged crash at the latest check. Continue the same overclocked Windmill route and retain the
+nxlink session through the user's run. The container's save route still cannot jump directly to Windmill.
+The reconstructed first-success checkpoint `6d26ed5d` has now launched on the Switch; the user confirms its
+intro video and audio both play correctly.
 
 **Builds:** Linux bench `build/linux-vk/conker_recomp`. Latest diagnostic Switch candidate
 `analysis/elf_archive/conker-vulkan_5924ba1f.{nro,elf}` (tree-insert logging enabled; not a benchmark).

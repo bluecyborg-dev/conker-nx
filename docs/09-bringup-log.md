@@ -1157,3 +1157,21 @@ first-success source state; the runtime log itself records APU startup and movie
 measurement. This does not establish whether a later build has the same behavior. The same artifact can be
 resent with
 `NRO=analysis/elf_archive/conker-vulkan_6d26ed5d.nro tools/nxlink_run.sh 192.168.1.248`.
+
+## 2026-10-19: profile-2 and GPU-timing diagnostic NRO sent to Switch
+
+Sent archived NRO `analysis/elf_archive/conker-vulkan_545de116.nro` (MD5
+`545de116f420fcd449a26f576a768d0b`) to `192.168.1.248`; its matching unstripped ELF remains archived. The
+live session is `run/net_logs/20261019-012749.log`. Launch arguments enabled `RECOMP_NX_PROFILE=2`,
+`RECOMP_VK_GPU_TIMING=1`, the 60-second watchdog, and a request for 1,785/921.6/1,600 MHz CPU/GPU/memory.
+The log confirms title-takeover/full-memory mode, profile-2 sampling at 1 kHz, Vulkan frame timestamps, and
+the game opened `BootIntro.xmv`. At the latest check the log had advanced through at least frame 595; no
+crash was logged. Frame 3 took 3,203 ms with zero shader compiles and 1.7 MB of texture work reported as
+16 ms; GPU timestamps were flowing for subsequent frames.
+
+The runtime detected that `sys-clk` is running and explicitly ignored the `CONKER_*_MHZ` requests, leaving
+clock control to its profile. This avoids competing with sys-clk. It verifies the service is active, but the
+log does not report the selected profile or the actual CPU/GPU/memory frequencies; the user's statement that
+the console is overclocked is not independently confirmed by MHz readback. The capture remains in progress.
+Continue the prior overclocked Windmill route, then preserve the final log and retrieve `prof.bin` from the
+SD card for full stack-sample analysis.
