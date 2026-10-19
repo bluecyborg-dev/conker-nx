@@ -1221,8 +1221,30 @@ to emergence or retreat. The profile summary across both Windmill visits names `
 per-hitch CPU times and do not tie those functions to the worm event.
 
 The session confirms a real presentation freeze in multiplayer and narrows the Windmill hitches away from
-measured GPU saturation. Keep the two issues separate: the MPBeach stop has PGRAPH NOP, guest-lock and OHCI
-IRQL evidence, while the Windmill hitch trigger still needs event-aligned CPU and renderer attribution. The
-runtime confirmed `sys-clk` was active but did not read back its selected profile or actual frequencies, so
-this diagnostic capture is not a verified overclock benchmark. See [14-port-status.md](14-port-status.md)
+measured GPU saturation. Keep the two issues separate, with MPBeach first: it has PGRAPH NOP, guest-lock and
+OHCI IRQL evidence, while the Windmill hitch trigger still needs event-aligned CPU and renderer attribution.
+The runtime confirmed `sys-clk` was active but did not read back its selected profile or actual frequencies,
+so this diagnostic capture is not a verified overclock benchmark. See [14-port-status.md](14-port-status.md)
 and [16-optimization-plan.md](16-optimization-plan.md) for current priorities.
+
+## 2026-10-19: MPBeach freeze source-trace findings and priority
+
+The next investigation is the MPBeach freeze, ahead of Windmill FPS work. Source review narrows the PGRAPH
+handoff to a measurable sequence. In the hooked pushbuffer path, `trap_deliver_hooked()` publishes the NOP
+register state, asserts the PGRAPH interrupt, and waits for `s_trap_taken`. The D3D wrapper
+`sub_005411D0()` enters `d3d_isr_enter()` (which may acquire the dispatch lock while managing the guest lock),
+acquires the PGRAPH trap lock, calls the generated handler, and marks the trap taken only when `NSOURCE` is
+set. A continuously pending NOP therefore means this acknowledgement sequence did not complete; the existing
+log does not show which stage stalled. This is a code-path narrowing, not a root-cause finding.
+
+OHCI's warning reads the modeled global IRQL-raised count after its bounded interrupt holdoff and then forces
+delivery. A depth of 2 shows that the modeled interrupt mask remained raised at that point, but does not name
+the raising thread or prove that the OHCI and PGRAPH symptoms share one cause. The guest lock reported at
+`0x004E1674` is separately held by thread 0 at `0x004C38D8`; keep its ownership and the PGRAPH/IRQL handoffs
+in the same time-ordered trace, but do not assume it is the runtime's GIL.
+
+Next diagnostic change should add gated, low-volume stage markers/counters for NOP publication, D3D handler
+entry, dispatch-lock/IRQL acquisition, trap-lock acquisition, generated-handler return, `trap_taken`, and the
+guest-lock waiter/holder. Capture which marker is last before presentation stops. Do not change guest-lock,
+IRQL, or PGRAPH acknowledgement semantics until that stage is identified. Windmill worm hitches remain
+priority 2 and require their own event-aligned CPU/renderer capture.

@@ -1,20 +1,28 @@
 # Conker optimization plan
 
-**Status (2026-10-19):** the cache-on/cache-off Windmill comparison on `e037bd66` reduced 3,072-byte
-constant-block copies but did not confirm an FPS gain. The profile-2/GPU-timing capture on `545de116`
-visited Windmill twice, then stopped presenting in MPBeach after frame 15,085. It recorded a pending PGRAPH
-NOP, a guest-lock waiter, and OHCI guest IRQL stuck at depth 2, with no crash or exception report. The user's
-Windmill marker is a worm emerging from the ground and retreating when the player moves away. Most Windmill
-hitches had no shader or texture work and the nearest GPU command-buffer samples reached at most 10.196 ms
-(none exceeded 16.67 ms), narrowing the search to guest/renderer CPU work or synchronization while leaving
-the exact worm-triggered function unidentified. Keep the multiplayer synchronization issue separate from the
-Windmill hitch investigation.
+**Status (2026-10-19):** first priority is the MPBeach presentation freeze. The profile-2/GPU-timing capture on
+`545de116` stopped presenting after frame 15,085 with PGRAPH NOP 237 pending, a waiter on guest lock
+`0x004E1674`, and OHCI guest IRQL stuck at depth 2. There is no crash or exception report. Source review
+narrows the trace to NOP publication/acknowledgement, the D3D PGRAPH handler's IRQL and trap-lock path, and
+the guest-lock holder; it does not yet identify the blocking point or root cause.
 
-This plan focuses on the reported gameplay slowdown near the former recursive-search freeze point, then uses measured results to improve frame pacing elsewhere. It follows the measurement and A/B methods in the port guide's `03-switch-performance.md` and Conker case study `platforms/xbox/conker/source-notes/06-performance.md`.
+After the freeze path is understood and addressed, return to the Windmill worm hitches. Most recorded hitches
+had no shader or texture work and the nearest GPU command-buffer samples reached at most 10.196 ms (none
+exceeded 16.67 ms), pointing first toward guest/renderer CPU work or synchronization. The profile data does not
+identify a worm-triggered function. The cache-on/cache-off comparison reduced 3,072-byte constant-block copies
+but did not confirm an FPS gain.
+
+The earlier plan focused on the reported slowdown near the former recursive-search freeze point. The current
+priority is to restore reliable MPBeach presentation, then use measured results to improve Windmill frame
+pacing. The measurement and A/B methods follow the port guide's `03-switch-performance.md` and Conker case
+study `platforms/xbox/conker/source-notes/06-performance.md`.
 
 ## Goal and quality guardrails
 
-- First remove or reduce the repeatable slowdown at the former freeze location on Switch.
+- First diagnose and resolve the repeatable MPBeach presentation freeze, preserving correct PGRAPH trap and
+  interrupt delivery.
+- After MPBeach is stable, reduce the repeatable Windmill slowdown around the worm emergence/retreat using
+  event-aligned CPU and wait measurements.
 - Preserve the current image quality. Texture quality reductions are out of scope for this plan. Render resolution stays at its current default; a temporary render-scale change may be used only to isolate a proven or suspected GPU pixel/fill limit, and must be restored after diagnosis.
 - Keep visual effects, audio, input response, and game behavior correct while improving frame-time consistency.
 - Retain 30 FPS in sections that already approach it. Treat 60 FPS as a later headroom goal, after the localized slowdown and missed-frame pattern are understood.
@@ -214,29 +222,30 @@ Do not change thread affinity or guest locking until the synchronization path is
 GPU timing if CPU evidence still does not isolate the critical path.
 Record the resulting evidence and any resolved issue in [09-bringup-log.md](09-bringup-log.md), and keep [14-port-status.md](14-port-status.md) aligned with the current priority. This plan is specific to `conker-nx` and is not copied into the port guide.
 
-## Immediate next action (2026-10-19)
+## Immediate next action (2026-10-19; priority order updated)
 
-Keep the game running as the first priority. The recent capture narrows the Windmill hitches and exposes a
-multiplayer synchronization stall, but it does not prove either root cause. Do not change the recursive walk,
-renderer, thread affinity, or guest lock based on aggregate profile shares.
+Restore reliable multiplayer presentation first. The capture exposes a PGRAPH/guest-lock/IRQL synchronization
+stall, but does not prove its root cause. Do not change the recursive walk, renderer, thread affinity, or guest
+lock based on aggregate profile shares.
 
-1. If the Switch SD card still has `sdmc:/switch/conker/prof.bin`, copy it to the host and analyze it with
-   the exact archived ELF, `analysis/elf_archive/conker-vulkan_545de116.elf`, using
-   `tools/prof_report.py`. Keep the original log and binary together; the streamed text summaries are
-   aggregate windows and not per-hitch attribution.
-2. For the MPBeach freeze, trace PGRAPH NOP 237 and its `PMC_INTR=0x1000` acknowledgement alongside the
-   guest-lock waiter/holder (`0x004E1674`, acquisition call site `0x004C38D8`) and OHCI0's stuck guest IRQL.
+1. Trace the MPBeach freeze end to end: PGRAPH NOP 237 publication and `PMC_INTR=0x1000`, delivery into the
+   D3D PGRAPH handler, guest-lock waiter/holder (`0x004E1674`, acquisition call site `0x004C38D8`), and
+   OHCI0's stuck guest IRQL. Add gated per-stage timestamps/counters around trap publication, handler entry,
+   IRQL/dispatch-lock entry, trap-lock acquisition, handler return, and `trap_taken`; preserve ordering without
+   adding a hot-loop log flood. Determine which stage fails to complete before changing synchronization code.
    The watchdog's saved stack includes return site `0x004CB0D2` in `sub_004CB0BD` (game-audio code), which
    contains an APU MMIO polling loop at `0x004CB0EC`; the watchdog did not provide the guest PC, so verify
    this lead before changing audio or synchronization behavior. APU output remained paced and reported no
    underruns, gaps, or dropped buffers.
-3. For Windmill, mark when the worm emerges, how long it remains visible, when it starts retreating, and
-   when the player moves away. Align those moments with frame IDs, draw/resource counts, CPU samples, and
-   adjacent GPU timestamps. The two logged Windmill visits contained 132 hitches of at least 50 ms, 125
-   without shader or texture work; nearest-frame GPU command-buffer values reached at most 10.196 ms, with
-   none above 16.67 ms. This makes GPU
-   execution or resource preparation unlikely explanations for most of these hitches, while guest CPU,
-   renderer CPU, scheduling, and waits remain open.
+2. If `sdmc:/switch/conker/prof.bin` is still on the Switch SD card, copy and analyze it with the exact
+   archived ELF `analysis/elf_archive/conker-vulkan_545de116.elf` and `tools/prof_report.py`. Keep the original
+   log and binary together; the streamed summaries are aggregate windows, not proof of the PGRAPH blocking
+   stage or per-hitch attribution.
+3. Once multiplayer presentation is stable, return to Windmill. Mark when the worm emerges, how long it remains
+   visible, when it starts retreating, and when the player moves away. Align those events with frame IDs,
+   draw/resource counts, CPU samples, and adjacent GPU timestamps. The two visits contained 132 hitches of at
+   least 50 ms, 125 without shader or texture work; nearest-frame GPU command-buffer values reached 10.196 ms
+   at most, with none above 16.67 ms. Guest CPU, renderer CPU, scheduling, and waits remain open.
 4. Treat `545de116` as a diagnostic run, not an FPS benchmark. The profile-2 sampler and GPU timestamps add
    overhead, and sys-clk's active profile/frequencies were not read back. Record the selected profile and
    actual clocks before any scored comparison. Do not reduce texture quality or make a permanent resolution

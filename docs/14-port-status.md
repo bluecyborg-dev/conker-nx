@@ -44,10 +44,13 @@ renderer CPU, or synchronization/wait costs. The user identified the recurring l
 from the ground and retreating when the player moves away. The log does not mark the worm state, so the
 measured hitches cannot yet be tied to that transition.
 
-**Focus: keep the game running as the priority; trace the multiplayer PGRAPH/guest-lock/OHCI stall and mark
-the Windmill worm emergence/retreat in a repeatable capture. Retrieve and resolve `prof.bin` against the
-matching ELF where available. Keep renderer hot-path and guest-CPU work as separate measured leads; make no
-performance claim from this instrumented run.**
+**Priority 1: restore reliable multiplayer presentation.** Trace the MPBeach PGRAPH NOP, guest-lock waiter,
+and OHCI IRQL hold to the stage that stops progressing before changing synchronization code. Retrieve and
+resolve `prof.bin` against the matching ELF if it remains available.
+
+**Priority 2: investigate the Windmill worm hitches.** Mark emergence, visible time, retreat, and player
+distance in a repeatable route, then compare event-aligned guest CPU, renderer CPU, and wait data. Keep the
+renderer hot path and guest CPU as separate measured leads; do not treat this instrumented run as a benchmark.
 
 **Builds:** Linux bench `build/linux-vk/conker_recomp`. Latest diagnostic Switch candidate
 `analysis/elf_archive/conker-vulkan_545de116.{nro,elf}` (tree-insert logging enabled; profile-2 and GPU
@@ -245,14 +248,17 @@ possible, even if the Linux bench uses a different resolution or aspect ratio fr
 aspect-ratio matching can wait. The current 640×480 back-buffer capture shows geometry projected far outside
 the view, so aspect ratio alone does not explain the black screen.
 
-Next milestones: investigate the captured multiplayer freeze by resolving the PGRAPH NOP, guest lock
-`0x004E1674`, and OHCI IRQL evidence; retrieve `prof.bin` from the Switch SD card if it remains available.
-For Windmill, use the worm emergence/retreat as a route marker and compare guest CPU, renderer CPU, and
-synchronization around that exact event. The new GPU timings and resource counters make GPU command-buffer
-saturation or shader/texture work unlikely explanations for most measured Windmill hitches, but the profile
-is diagnostic and not a scored benchmark. Keep the renderer hot path active alongside guest CPU analysis;
-the constant-block cache reduces copies but still has no demonstrated frame-rate benefit. Continue tracing
-the XMV/DirectSound refill issue using the early sound-on/black-menu history, and preserve visual quality.
+Next milestone: trace the MPBeach freeze first. The hooked NOP path publishes the trap and waits for
+`s_trap_taken`; the D3D PGRAPH wrapper enters its IRQL/dispatch-lock path, acquires the trap lock, runs the
+generated handler, and marks the trap taken when `NSOURCE` is set. Instrument these handoffs and the guest
+lock holder at `0x004C38D8` to locate the missing progress step. OHCI's depth-2 warning confirms the modeled
+global IRQL count remained raised through its holdoff window, but does not identify the holder or prove it is
+the same blockage. After multiplayer presentation is stable, investigate the Windmill worm event with
+event-aligned guest CPU, renderer CPU, and synchronization data. The GPU/resource measurements make GPU
+command-buffer saturation and shader/texture work unlikely explanations for most measured hitches, but the
+profile is diagnostic and not a scored benchmark. The constant-block cache reduces copies but still has no
+demonstrated frame-rate benefit. Continue tracing the XMV/DirectSound refill issue using the early sound-on/
+black-menu history, and preserve visual quality.
 ## Known issues
 
 Each issue: **culprit** = what probably causes it, **fix** = what should solve it. Tick it once it is solved
@@ -298,7 +304,7 @@ and say how.
     that stall, capture the fixed build from a repeatable single-player save point and mark the reported
     location before changing the bounded traversal.
 
-- [ ] **Intermittent Windmill presentation stall / severe CPU frame hitches** (Switch, NROs `e037bd66` and `5924ba1f`, 2026-10-18).
+- [ ] **Priority 2: intermittent Windmill presentation stall / severe CPU frame hitches** (Switch, NROs `e037bd66` and `5924ba1f`, 2026-10-18).
   - Evidence: profile-2 log `run/net_logs/20261018-022626.log` records 1,902 ms and 2,086 ms frames at
     2,830–2,831 followed by zero FPS/vblank. `game:0` remained at 98–100% of one core; 75.1% of its late
     sampled PCs were in `sub_000139D0`. In the later overclocked diagnostic capture `030841.log`, the game
@@ -321,7 +327,7 @@ and say how.
     and synchronization. Retrieve `prof.bin` from the SD card if it remains available. Do not add a loop cap
     or skip rebalancing without evidence.
 
-- [ ] **PGRAPH NOP and guest synchronization stall** (NROs `630412bd` and `545de116`, 2026-10-18/19).
+- [ ] **Priority 1: PGRAPH NOP and guest synchronization stall** (NROs `630412bd` and `545de116`, 2026-10-18/19).
   - Evidence: `run/net_logs/20261018-013420.log` reports that NOP parameter `0x12C80041` was still pending;
     FPS and vblank fell to zero, and the watchdog saw no frame after 20 and 40 seconds. Earlier NOP traps
     were handled in the same run. The pass reached frame 949 after loading `SoloSetup` text.
@@ -336,10 +342,11 @@ and say how.
     `0x004E1674` while OHCI0 reported guest IRQL stuck at depth 2. The last GPU command-buffer time was
     7.299 ms; APU pacing and audio output stayed healthy. The saved guest stack and recent targets point to
     game-audio code, but no guest instruction pointer was reported. No crash or exception was logged.
-  - Cause and next step: unresolved synchronization/interrupt interaction. Retrieve the SD-card `prof.bin`
-    if available, then trace the PGRAPH acknowledgement with guest-lock `0x004E1674`, its holder at
-    `0x004C38D8`, and OHCI guest IRQL delivery. Keep this multiplayer freeze separate from the Windmill
-    worm hitches and the former recursive-search slowdown.
+  - Cause and next step: unresolved synchronization/interrupt interaction. First add gated stage markers for
+    NOP publication, D3D handler entry, IRQL/dispatch-lock entry, trap-lock acquisition, generated-handler
+    return, and `trap_taken`; correlate these with guest-lock `0x004E1674` and holder `0x004C38D8`, plus OHCI
+    guest IRQL. Retrieve the SD-card `prof.bin` if available as supporting evidence. Keep this multiplayer
+    freeze separate from the Windmill worm hitches and the former recursive-search slowdown.
 
 - [x] **R5G6B5 shadow-map clears were decoded as cyan** (Linux and Switch renderer path).
   - Culprit: Conker's projected shadows render into 128×128 and 64×64 R5G6B5 (16-bit) surfaces cleared with
