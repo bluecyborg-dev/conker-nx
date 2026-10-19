@@ -1089,9 +1089,12 @@ prepare these five historical checkpoints: first-success NRO `31500df5` (the NT-
 seed, and small-VMA-fallback source state at commit `52a4270`, before the APU mapping fix), source revision
 `a43804b` (black-screen investigation before the lifter correction), source revision `1bc623e`
 (black-screen fix), source revision `c130f84` (APU mapping fix as a sound-path control), and archived NRO
-`688d985e` as a later known-good reference. The first four checkpoints have no NRO in
-`analysis/elf_archive`: rebuild `52a4270`, then build the other three source revisions. The `688d985e` NRO
-and matching ELF are already archived. No Switch sound claim is made from these Docker captures.
+`688d985e` as a later known-good reference. The original `31500df5` binary was absent, so it has now been
+rebuilt from source commit `52a4270`; the reconstructed NRO is `analysis/elf_archive/conker-vulkan_6d26ed5d.nro`
+(MD5 `6d26ed5d4f7cadfb4cb5e5c4e87ffa32`) with its matching unstripped ELF. Its hash does not match the
+historical NRO hash, so this is a source-state reconstruction, not the original binary. Revisions `a43804b`,
+`1bc623e`, and `c130f84` still need NRO builds. The `688d985e` NRO and matching ELF are archived. No Switch
+sound claim is made from the Docker captures.
 
 ## 2026-10-18: next overclock capture prepared with stack and renderer sampling
 
@@ -1122,3 +1125,20 @@ and any point where frame progress or FPS changes. The profiler adds overhead, s
 not an overclocked performance benchmark. Keep draw/surface diagnostic counters off to avoid adding per-draw
 cost; the stack samples and existing hitch/thread reports provide the renderer and CPU leads needed for the
 next optimization decision.
+
+## 2026-10-18: first-success audio checkpoint reconstructed; upload not accepted
+
+Rebuilt the first-success source state from commit `52a4270` in an isolated worktree, using that revision's
+seed list and regeneration scripts. It regenerated 21,284 functions and produced NRO MD5
+`6d26ed5d4f7cadfb4cb5e5c4e87ffa32` (archive prefix `6d26ed5d`), rather than the historical NRO MD5
+`31500df5...`. The output is therefore a reconstruction from the recorded source state, not a bit-identical
+copy of the original binary. `_start` is at address zero. The matching unstripped ELF and NRO are archived
+as `analysis/elf_archive/conker-vulkan_6d26ed5d.{elf,nro}`.
+
+Four attempts to send it with `tools/nxlink_run.sh 192.168.1.248` failed immediately with
+`Connection to 192.168.1.248 failed`; their logs are `run/net_logs/20261018-214748.log`,
+`run/net_logs/20261018-214754.log`, `run/net_logs/20261018-214800.log`, and
+`run/net_logs/20261018-214853.log`. The Switch responded to one ICMP ping, so the host is reachable, but no
+transfer or Switch launch is confirmed and the nxlink logs contain no game output. NetLoader availability
+could not be verified beyond the failed connection. Retry when NetLoader is open; send the archived NRO with
+`NRO=analysis/elf_archive/conker-vulkan_6d26ed5d.nro tools/nxlink_run.sh 192.168.1.248`.

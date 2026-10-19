@@ -21,7 +21,10 @@ exit code 0 and no crash/exception report. It was overclocked and is not a stock
 container, and keep the renderer hot path active alongside the guest CPU investigation.** Diagnostic NRO
 `545de116` is built with `sub_000139D0` counters and optional per-frame GPU timestamps; its next launch will
 also enable profile-2 stack sampling and the hang watchdog. It has not been sent to hardware. The container's
-save route still cannot jump directly to Windmill; no further Switch run is available for now.
+save route still cannot jump directly to Windmill. Four attempts to send the reconstructed first-success
+audio checkpoint failed before connecting to `192.168.1.248`; the Switch responds to ping, but no Switch run
+occurred. The first-checkpoint NRO and matching ELF are ready in the archive for retry when NetLoader accepts
+the connection.
 
 **Builds:** Linux bench `build/linux-vk/conker_recomp`. Latest diagnostic Switch candidate
 `analysis/elf_archive/conker-vulkan_5924ba1f.{nro,elf}` (tree-insert logging enabled; not a benchmark).
@@ -339,10 +342,12 @@ and say how.
     duration in this headless route; it cannot verify soundtrack identity, audio quality, or Switch audibility.
     The selected hardware checkpoints are `31500df5` (first successful run), `a43804b` (pre-lifter-fix
     investigation), `1bc623e` (black-scene fix), `c130f84` (high-VA APU fix), and archived `688d985e` as a
-    later known-good reference. The first-success NRO `31500df5` (source state `52a4270`) and builds from
-    revisions `a43804b`, `1bc623e`, and `c130f84` are absent from the local archive and need rebuilding;
-    `688d985e` and its matching ELF are already archived. Docker PCM confirms only a short signal burst, not
-    audible or correct Switch music.
+    later known-good reference. The original first-success NRO `31500df5` is absent, but its source state
+    (`52a4270`) has been rebuilt as NRO `6d26ed5d` with a matching unstripped ELF. Its MD5 differs from the
+    historical binary, so treat it as a source-state reconstruction. Upload failed four times before
+    connecting to `192.168.1.248`; the host responds to ping, but it has not been tested on Switch. Builds from revisions `a43804b`,
+    `1bc623e`, and `c130f84` still need rebuilding; `688d985e` and its matching ELF are archived. Docker PCM
+    confirms only a short signal burst, not audible or correct Switch music.
   - The earlier shader/pipeline-stall explanation is unconfirmed: Linux traces show long early frames with
     zero shader compilations and about 2 ms spent uploading three textures. The configured cache path did not
     resolve the audio cutoff.
