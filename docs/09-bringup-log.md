@@ -1243,8 +1243,36 @@ the raising thread or prove that the OHCI and PGRAPH symptoms share one cause. T
 `0x004E1674` is separately held by thread 0 at `0x004C38D8`; keep its ownership and the PGRAPH/IRQL handoffs
 in the same time-ordered trace, but do not assume it is the runtime's GIL.
 
-Next diagnostic change should add gated, low-volume stage markers/counters for NOP publication, D3D handler
-entry, dispatch-lock/IRQL acquisition, trap-lock acquisition, generated-handler return, `trap_taken`, and the
-guest-lock waiter/holder. Capture which marker is last before presentation stops. Do not change guest-lock,
-IRQL, or PGRAPH acknowledgement semantics until that stage is identified. Windmill worm hitches remain
-priority 2 and require their own event-aligned CPU/renderer capture.
+The next step is to run the gated PGRAPH stage counters below on hardware and capture how far the handoff
+progresses before presentation stops. They instrument the runtime GIL suspension/resumption and D3D PGRAPH handoff; they
+do not directly instrument game critical-section ownership at `0x004E1674` or OHCI's IRQL state. Correlate
+those existing log signals by timestamp if they recur. Do not change guest-lock, IRQL, or PGRAPH
+acknowledgement semantics until the stalled stage is identified. Windmill worm hitches remain priority 2 and
+require their own event-aligned CPU/renderer capture.
+
+## 2026-10-19: PGRAPH handoff stage counters implemented and diagnostic NRO built
+
+Added the opt-in runtime switch `RECOMP_PGRAPH_TRACE=1`. During a hooked NOP handoff it counts NOP
+publication, IRQ assertion, D3D PGRAPH handler entry, runtime GIL suspension/resume around IRQL raise,
+trap-lock acquisition, `NSOURCE` state, generated-handler return, `trap_taken`, and acknowledgement return.
+If that NOP remains pending, the existing two-second warning is followed by one stage-count summary. Normal
+runs do not emit per-interrupt trace lines, and the instrumentation does not change synchronization or
+acknowledgement behavior. These counters should tell whether the next freeze stops before handler entry,
+during IRQL/GIL handoff, on the PGRAPH trap lock, inside the generated handler, or before/after the trap
+signal. These are ordered stage counts, not timestamps or guest instruction samples. They do not instrument the
+separate game critical section at `0x004E1674` or OHCI; retain and time-align those logs if they recur.
+
+The source compiled in `conker-dev` with `docker run --rm -v "$PWD":/work -w /work conker-dev cmake --build
+build/linux-vk -j2`. A 10-second smoke run with `RECOMP_PGRAPH_TRACE=1` reached the startup asset/render path
+and handled an initial `NOP(40)`; it ended with the expected timeout exit 137. No `[CRASH]`, `[ICALL]`, or
+`[STUB]` was found. The startup route did not leave a NOP pending for two seconds, so it did not exercise the
+new stalled-trap summary and does not validate the multiplayer case.
+
+Switch diagnostic NRO `bc1df101` was built with the existing tree-insert diagnostics and staged separately at
+`build/switch-vk-pgraph-trace-sd/switch/conker/conker-vulkan.nro`. NRO MD5 is
+`bc1df1013c9a2f2bd266648b462438d5`; matching unstripped AArch64 ELF MD5 is
+`582b754fe61d7383643a2551058f3266` (Build ID `d5aab6e23c1c54dce854a9c5e52ff9fc49e16e05`). The exact
+pair is archived at `analysis/elf_archive/conker-vulkan_bc1df101.{nro,elf}`. The build has not been run on
+the Switch. Launch it with profile-2 sampling, GPU timestamps, watchdog retention, and
+`RECOMP_PGRAPH_TRACE=1`; the next investigation remains the MPBeach NOP/guest-lock/OHCI freeze, with Windmill
+worm hitches priority 2.

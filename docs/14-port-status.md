@@ -52,7 +52,12 @@ resolve `prof.bin` against the matching ELF if it remains available.
 distance in a repeatable route, then compare event-aligned guest CPU, renderer CPU, and wait data. Keep the
 renderer hot path and guest CPU as separate measured leads; do not treat this instrumented run as a benchmark.
 
-**Builds:** Linux bench `build/linux-vk/conker_recomp`. Latest diagnostic Switch candidate
+**Builds:** Linux bench `build/linux-vk/conker_recomp`. New PGRAPH-trace Switch candidate
+`analysis/elf_archive/conker-vulkan_bc1df101.{nro,elf}` (NRO MD5 `bc1df1013c9a2f2bd266648b462438d5`,
+matching unstripped ELF MD5 `582b754fe61d7383643a2551058f3266`); staged at
+`build/switch-vk-pgraph-trace-sd/switch/conker/conker-vulkan.nro`. It has not been run on hardware. Enable
+the trap-stage counters with `RECOMP_PGRAPH_TRACE=1`; pair with profile-2, GPU timing, and watchdog runtime
+arguments for the next capture. Previous hardware-tested diagnostic candidate
 `analysis/elf_archive/conker-vulkan_545de116.{nro,elf}` (tree-insert logging enabled; profile-2 and GPU
 timing used at launch, so it is not a benchmark). Previous overclocked diagnostic candidate
 `analysis/elf_archive/conker-vulkan_5924ba1f.{nro,elf}`.
@@ -248,10 +253,11 @@ possible, even if the Linux bench uses a different resolution or aspect ratio fr
 aspect-ratio matching can wait. The current 640×480 back-buffer capture shows geometry projected far outside
 the view, so aspect ratio alone does not explain the black screen.
 
-Next milestone: trace the MPBeach freeze first. The hooked NOP path publishes the trap and waits for
-`s_trap_taken`; the D3D PGRAPH wrapper enters its IRQL/dispatch-lock path, acquires the trap lock, runs the
-generated handler, and marks the trap taken when `NSOURCE` is set. Instrument these handoffs and the guest
-lock holder at `0x004C38D8` to locate the missing progress step. OHCI's depth-2 warning confirms the modeled
+Next milestone: run the staged diagnostic NRO `bc1df101` on the Switch with profile-2, GPU timing, retained
+watchdog, and `RECOMP_PGRAPH_TRACE=1`. Its gated counters cover the hooked NOP and D3D PGRAPH handoff through
+`s_trap_taken`; the count pattern should show how far that path progressed before presentation stopped. The
+counters do not record timestamps or directly instrument ownership of game critical section `0x004E1674` or
+OHCI IRQL, so retain and align any reports from those paths. OHCI's depth-2 warning confirms the modeled
 global IRQL count remained raised through its holdoff window, but does not identify the holder or prove it is
 the same blockage. After multiplayer presentation is stable, investigate the Windmill worm event with
 event-aligned guest CPU, renderer CPU, and synchronization data. The GPU/resource measurements make GPU
@@ -342,11 +348,14 @@ and say how.
     `0x004E1674` while OHCI0 reported guest IRQL stuck at depth 2. The last GPU command-buffer time was
     7.299 ms; APU pacing and audio output stayed healthy. The saved guest stack and recent targets point to
     game-audio code, but no guest instruction pointer was reported. No crash or exception was logged.
-  - Cause and next step: unresolved synchronization/interrupt interaction. First add gated stage markers for
-    NOP publication, D3D handler entry, IRQL/dispatch-lock entry, trap-lock acquisition, generated-handler
-    return, and `trap_taken`; correlate these with guest-lock `0x004E1674` and holder `0x004C38D8`, plus OHCI
-    guest IRQL. Retrieve the SD-card `prof.bin` if available as supporting evidence. Keep this multiplayer
-    freeze separate from the Windmill worm hitches and the former recursive-search slowdown.
+  - Cause and next step: unresolved synchronization/interrupt interaction. Candidate `bc1df101` now has
+    gated per-NOP stage counters for NOP publication, D3D handler entry, IRQL/runtime-GIL handoff, PGRAPH
+    trap-lock acquisition, generated-handler return, `NSOURCE`, and `trap_taken`. Run it on hardware with
+    `RECOMP_PGRAPH_TRACE=1`; correlate the last completed stage with any renewed game critical-section
+    waiter/holder reports at `0x004E1674` / `0x004C38D8` and OHCI guest IRQL. The new counters do not directly
+    instrument that separate game critical section or OHCI. Retrieve the SD-card `prof.bin` if available as
+    supporting evidence. Docker startup did not reproduce this Switch stall. Keep the freeze separate from
+    the Windmill worm hitches and the former recursive-search slowdown.
 
 - [x] **R5G6B5 shadow-map clears were decoded as cyan** (Linux and Switch renderer path).
   - Culprit: Conker's projected shadows render into 128×128 and 64×64 R5G6B5 (16-bit) surfaces cleared with

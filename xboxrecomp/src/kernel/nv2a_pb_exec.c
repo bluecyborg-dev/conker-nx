@@ -36,6 +36,7 @@
  * Morton order, not a second one that can disagree with it. */
 #include "../d3d/d3d8_swizzle.h"
 #include "nv2a_backend.h"
+#include "nv2a_pb_trace.h"
 
 extern ptrdiff_t xbox_GetMemoryOffset(void);
 extern void xbox_FramebufferWindowSet(uint32_t fb_va, uint32_t pitch);
@@ -4383,6 +4384,66 @@ static int capture_render_state(uint32_t method, uint32_t param)
  * one, and says when it has taken it. */
 static volatile LONG s_trap_hooked, s_trap_lock, s_trap_taken;
 
+/* Only count the short D3D/PGRAPH handoff window opened by a hooked NOP.
+ * The trace is off by default and prints only from the existing two-second
+ * pending-trap warning, so a normal run gets no per-interrupt log traffic. */
+static volatile LONG s_pgraph_trace_active;
+static volatile LONG s_pgraph_trace_stages[NV2A_PB_TRACE_STAGE_COUNT];
+
+static int pb_pgraph_trace_enabled(void)
+{
+    static int cache = -1;
+    return env_once("RECOMP_PGRAPH_TRACE", &cache);
+}
+
+void nv2a_pb_trace_begin(void)
+{
+    int i;
+    if (!pb_pgraph_trace_enabled())
+        return;
+    InterlockedExchange(&s_pgraph_trace_active, 0);
+    for (i = 0; i < NV2A_PB_TRACE_STAGE_COUNT; i++)
+        InterlockedExchange(&s_pgraph_trace_stages[i], 0);
+    InterlockedExchange(&s_pgraph_trace_active, 1);
+}
+
+void nv2a_pb_trace_end(void)
+{
+    if (pb_pgraph_trace_enabled())
+        InterlockedExchange(&s_pgraph_trace_active, 0);
+}
+
+void nv2a_pb_trace_stage(Nv2aPbTraceStage stage)
+{
+    if ((unsigned)stage < NV2A_PB_TRACE_STAGE_COUNT
+        && InterlockedCompareExchange(&s_pgraph_trace_active, 0, 0))
+        InterlockedIncrement(&s_pgraph_trace_stages[stage]);
+}
+
+void nv2a_pb_trace_report(uint32_t nop_param)
+{
+    static const char *const names[NV2A_PB_TRACE_STAGE_COUNT] = {
+        "nop_published", "irq_asserted", "d3d_entry", "d3d_isr_entry",
+        "gil_suspend_begin", "gil_suspended", "irql_raise_begin",
+        "irql_raise_return", "gil_resume_begin", "gil_resumed",
+        "irql_already_raised", "trap_lock_begin", "trap_lock_acquired",
+        "nsource_set", "nsource_clear", "generated_return", "taken_begin",
+        "taken_signalled", "taken_return", "trap_unlocked",
+        "irql_restore_begin", "irql_restored", "ack_wait_done", "ack_return"
+    };
+    int i;
+
+    if (!pb_pgraph_trace_enabled()
+        || !InterlockedCompareExchange(&s_pgraph_trace_active, 0, 0))
+        return;
+    fprintf(stderr, "  [PGRAPH-TRACE] NOP(%u) stages:", nop_param);
+    for (i = 0; i < NV2A_PB_TRACE_STAGE_COUNT; i++)
+        fprintf(stderr, " %s=%ld", names[i],
+                (long)InterlockedCompareExchange(&s_pgraph_trace_stages[i], 0, 0));
+    fputc('\n', stderr);
+    fflush(stderr);
+}
+
 /* What the executor sleeps on while it waits for the driver -- a trap taken,
  * a flip retired. Polling with Sleep(0) kept a core busy for the whole wait,
  * and a Switch has three. Auto-reset; the waits also time out every
@@ -4422,6 +4483,7 @@ void nv2a_pb_trap_taken(void)
     nv[0x000100 / 4] &= ~0x1000u;      /* PMC_INTR_0: PGRAPH */
     InterlockedExchange(&s_trap_taken, 1);
     SetEvent(driver_event());
+    nv2a_pb_trace_stage(NV2A_PB_TRACE_TRAP_TAKEN_SIGNALLED);
 }
 
 static void trap_deliver_hooked(volatile uint32_t *nv, uint32_t method,
@@ -4433,6 +4495,7 @@ static void trap_deliver_hooked(volatile uint32_t *nv, uint32_t method,
     static unsigned handled_n;
 
     xbox_Nv2aHoldInterrupts(1);        /* the ack thread leaves PGRAPH alone */
+    nv2a_pb_trace_begin();
     while (InterlockedCompareExchange(&s_trap_lock, 1, 0) != 0)
         Sleep(0);
     InterlockedExchange(&s_trap_taken, 0);
@@ -4441,8 +4504,10 @@ static void trap_deliver_hooked(volatile uint32_t *nv, uint32_t method,
     nv[0x400108 / 4] = 1;                          /* NSOURCE */
     nv[0x400100 / 4] |= 1;                         /* PGRAPH_INTR */
     nv[0x000100 / 4] |= 0x1000;                    /* PMC_INTR_0: PGRAPH */
+    nv2a_pb_trace_stage(NV2A_PB_TRACE_NOP_PUBLISHED);
     InterlockedExchange(&s_trap_lock, 0);
     xbox_set_irq_line(3, 1);
+    nv2a_pb_trace_stage(NV2A_PB_TRACE_IRQ_ASSERTED);
     /* PGRAPH stalls until the driver has taken the trap, however long. */
     while (!InterlockedCompareExchange(&s_trap_taken, 0, 0)) {
         /* Level, like the hardware: asserted until taken. The ack thread may
@@ -4459,14 +4524,18 @@ static void trap_deliver_hooked(volatile uint32_t *nv, uint32_t method,
             fprintf(stderr, "  [PB] NOP(%u) trap still pending after 2 s "
                     "(PMC_INTR %08X EN %08X)\n", param, nv[0x100 / 4],
                     nv[0x140 / 4]);
+            nv2a_pb_trace_report(param);
             give_up = GetTickCount64() + 2000;
         }
         WaitForSingleObject(driver_event(), 1);
     }
+    nv2a_pb_trace_stage(NV2A_PB_TRACE_ACK_WAIT_DONE);
     xbox_set_irq_line(3, 0);
     if ((++handled_n & 1023) == 0)
         fprintf(stderr, "  [PB] NOP trap handled, %u so far\n", handled_n);
     xbox_Nv2aHoldInterrupts(0);
+    nv2a_pb_trace_stage(NV2A_PB_TRACE_ACK_RETURN);
+    nv2a_pb_trace_end();
 }
 
 /* Flips the driver has retired, reported by the project (the retire is D3D

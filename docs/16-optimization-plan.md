@@ -6,6 +6,14 @@
 narrows the trace to NOP publication/acknowledgement, the D3D PGRAPH handler's IRQL and trap-lock path, and
 the guest-lock holder; it does not yet identify the blocking point or root cause.
 
+Gated per-NOP stage counters are now implemented in diagnostic candidate `bc1df101`, covering trap
+publication, IRQ assertion, D3D handler entry, runtime GIL/IRQL handoff, PGRAPH trap-lock acquisition,
+generated-handler return, `NSOURCE`, and trap acknowledgement. Docker compilation succeeded; the 10-second
+startup smoke reached rendering and handled an initial NOP, then ended at the planned timeout. It did not
+reproduce or test the Switch-only stall. The NRO is staged for hardware capture; the counters do not directly
+instrument game critical-section ownership at `0x004E1674` or OHCI's IRQL state, and no synchronization
+semantics have been changed.
+
 After the freeze path is understood and addressed, return to the Windmill worm hitches. Most recorded hitches
 had no shader or texture work and the nearest GPU command-buffer samples reached at most 10.196 ms (none
 exceeded 16.67 ms), pointing first toward guest/renderer CPU work or synchronization. The profile data does not
@@ -228,11 +236,13 @@ Restore reliable multiplayer presentation first. The capture exposes a PGRAPH/gu
 stall, but does not prove its root cause. Do not change the recursive walk, renderer, thread affinity, or guest
 lock based on aggregate profile shares.
 
-1. Trace the MPBeach freeze end to end: PGRAPH NOP 237 publication and `PMC_INTR=0x1000`, delivery into the
-   D3D PGRAPH handler, guest-lock waiter/holder (`0x004E1674`, acquisition call site `0x004C38D8`), and
-   OHCI0's stuck guest IRQL. Add gated per-stage timestamps/counters around trap publication, handler entry,
-   IRQL/dispatch-lock entry, trap-lock acquisition, handler return, and `trap_taken`; preserve ordering without
-   adding a hot-loop log flood. Determine which stage fails to complete before changing synchronization code.
+1. Run diagnostic NRO `bc1df101` on the Switch with
+   `RECOMP_NX_PROFILE=2 RECOMP_VK_GPU_TIMING=1 RECOMP_WATCHDOG_SECS=60 RECOMP_WATCHDOG_KEEP=1 RECOMP_PGRAPH_TRACE=1`.
+   The new counter summary is emitted alongside the existing NOP-pending warning every two seconds, only
+   while a hooked NOP is stuck. Ordered stage counts show how far the handoff progressed without a per-interrupt
+   log flood; they are not timestamps or guest instruction samples. Correlate them with guest-lock
+   waiter/holder (`0x004E1674`, acquisition call site
+   `0x004C38D8`) and OHCI0's IRQL depth. Determine where progress stops before changing synchronization code.
    The watchdog's saved stack includes return site `0x004CB0D2` in `sub_004CB0BD` (game-audio code), which
    contains an APU MMIO polling loop at `0x004CB0EC`; the watchdog did not provide the guest PC, so verify
    this lead before changing audio or synchronization behavior. APU output remained paced and reported no

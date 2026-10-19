@@ -29,6 +29,7 @@
  * XBOX_PTR/MEM32 accessors; the register names below are its macros. */
 #define RECOMP_GENERATED_CODE
 #include "recomp_funcs.h"
+#include "../xboxrecomp/src/kernel/nv2a_pb_trace.h"
 
 /* ── ICALL trace ring buffer ───────────────────────────────── */
 
@@ -164,22 +165,43 @@ extern int xbox_gil_suspend(void);
 extern void xbox_gil_resume(int depth);
 extern void xbox_Nv2aVblankTaken(void);
 
-static uint8_t d3d_isr_enter(void)
+static uint8_t d3d_isr_enter(int pgraph_trace)
 {
     uint8_t old = xbox_CurrentIrql();
 
+    if (pgraph_trace)
+        nv2a_pb_trace_stage(NV2A_PB_TRACE_D3D_ISR_ENTRY);
     if (old < 2) {
+        if (pgraph_trace)
+            nv2a_pb_trace_stage(NV2A_PB_TRACE_GIL_SUSPEND_BEGIN);
         int d = xbox_gil_suspend();
+        if (pgraph_trace)
+            nv2a_pb_trace_stage(NV2A_PB_TRACE_GIL_SUSPENDED);
+        if (pgraph_trace)
+            nv2a_pb_trace_stage(NV2A_PB_TRACE_IRQL_RAISE_BEGIN);
         old = xbox_KfRaiseIrql(2);
+        if (pgraph_trace)
+            nv2a_pb_trace_stage(NV2A_PB_TRACE_IRQL_RAISE_RETURN);
+        if (pgraph_trace)
+            nv2a_pb_trace_stage(NV2A_PB_TRACE_GIL_RESUME_BEGIN);
         xbox_gil_resume(d);
+        if (pgraph_trace)
+            nv2a_pb_trace_stage(NV2A_PB_TRACE_GIL_RESUMED);
+    } else if (pgraph_trace) {
+        nv2a_pb_trace_stage(NV2A_PB_TRACE_IRQL_ALREADY_RAISED);
     }
     return old;
 }
 
-static void d3d_isr_leave(uint8_t old)
+static void d3d_isr_leave(uint8_t old, int pgraph_trace)
 {
-    if (old < 2)
+    if (old < 2) {
+        if (pgraph_trace)
+            nv2a_pb_trace_stage(NV2A_PB_TRACE_IRQL_RESTORE_BEGIN);
         xbox_KfLowerIrql(old);
+        if (pgraph_trace)
+            nv2a_pb_trace_stage(NV2A_PB_TRACE_IRQL_RESTORED);
+    }
 }
 
 /* Flips retired by a handler call: D3D's retire index, at +0x1BC of the
@@ -203,7 +225,7 @@ void sub_00540F70(void)
      * handler (DPC thread vs a D3D busy-wait) in between was counted by
      * both, the executor's flip index ran one off for good, and every
      * FLIP_STALL then waited out its 250 ms (Carbon, console, 3.7 fps). */
-    uint8_t old = d3d_isr_enter();
+    uint8_t old = d3d_isr_enter(0);
     uint32_t head = MEM32(blk + 0x1BC);
 
     xbox_Nv2aVblankTaken();
@@ -215,7 +237,7 @@ void sub_00540F70(void)
             fprintf(stderr, "[d3d] vblank #%u blk %08X retire %u vbl %u pend %08X/%08X\n", n, blk,
                     MEM32(blk + 0x1BC), MEM32(blk + 0x1C0), MEM32(blk + 0x174), MEM32(blk + 0x180));
     }
-    d3d_isr_leave(old);
+    d3d_isr_leave(old, 0);
 }
 
 /* PGRAPH handler, thiscall, ecx = the device's hardware block (+0 =
@@ -237,23 +259,35 @@ void sub_005411D0(void)
 {
     volatile uint32_t *nv = (volatile uint32_t *)XBOX_PTR(0xFD000000u);
     uint32_t blk = ecx;
-    uint8_t old = d3d_isr_enter();
+    uint8_t old;
     uint32_t head = MEM32(blk + 0x1BC);     /* at DISPATCH, as above */
     uint32_t nsource;
 
+    nv2a_pb_trace_stage(NV2A_PB_TRACE_D3D_HANDLER_ENTRY);
+    old = d3d_isr_enter(1);
+    nv2a_pb_trace_stage(NV2A_PB_TRACE_TRAP_LOCK_BEGIN);
     nv2a_pb_trap_lock();
+    nv2a_pb_trace_stage(NV2A_PB_TRACE_TRAP_LOCK_ACQUIRED);
     nsource = nv[0x400108 / 4];
     sub_005411D0_gen();
+    nv2a_pb_trace_stage(NV2A_PB_TRACE_GENERATED_HANDLER_RETURN);
     nv2a_pb_flip_retired(MEM32(blk + 0x1BC) - head);   /* a flip queued on its vblank retires at once */
-    if (nsource)
+    if (nsource) {
+        nv2a_pb_trace_stage(NV2A_PB_TRACE_NSOURCE_SET);
+        nv2a_pb_trace_stage(NV2A_PB_TRACE_TRAP_TAKEN_BEGIN);
         nv2a_pb_trap_taken();
+        nv2a_pb_trace_stage(NV2A_PB_TRACE_TRAP_TAKEN_RETURN);
+    } else {
+        nv2a_pb_trace_stage(NV2A_PB_TRACE_NSOURCE_CLEAR);
+    }
     nv2a_pb_trap_unlock();
+    nv2a_pb_trace_stage(NV2A_PB_TRACE_TRAP_UNLOCKED);
     if (getenv("CONKER_D3D_TRACE")) {
         static unsigned n;
         if (n++ < 40 || n % 200 == 0)
             fprintf(stderr, "[d3d] pgraph #%u nsource %08X retire %u\n", n, nsource, MEM32(blk + 0x1BC));
     }
-    d3d_isr_leave(old);
+    d3d_isr_leave(old, 1);
 }
 
 /* ── Float to integer, sub_00471288 (_ftol2) ──────────────────
