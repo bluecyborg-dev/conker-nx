@@ -191,12 +191,14 @@ snapshot if progress stops. The log carries per-thread PC/caller summaries; `pro
 full stacks. Use that diagnostic run when a hardware session is available, then decide whether the guest tree
 walk, the executor, or both warrant an isolated code change.
 
-In a separate follow-up, revisit the intro audio using early startup logs/builds where the user recalls that
-the intro had sound while the front end was black. The Docker pre/post-`c130f84` A/B produced similar
-two-second PCM bursts, but the dummy output cannot establish what a listener hears. Rebuild the selected early
-checkpoints for a hardware listening comparison, then trace the XMV producer and DirectSound callback/refill
-behavior through the first completion. Do not treat initialized APU output or nonzero PCM alone as proof that
-the intro soundtrack was audible.
+In a separate follow-up, compare intro audio across source checkpoints. The user confirms that both picture
+and sound play correctly on the reconstructed first-success source state (`52a4270`, NRO `6d26ed5d`). This
+verifies that the early checkpoint is audible, but does not prove later builds work. The Docker
+pre/post-`c130f84` A/B produced similar two-second PCM bursts, and dummy output cannot establish what a listener
+hears. Rebuild the intermediate revisions (`a43804b`, `1bc623e`) and the APU mapping revision (`c130f84`) for
+hardware comparison against the confirmed-audio checkpoint and a current build. Then trace the XMV producer
+and DirectSound callback/refill behavior through the first completion. Treat the user's listening result as
+the audio evidence; APU initialization or nonzero PCM alone does not prove that the intended soundtrack plays.
 
 After the guest stall is understood, measure the previously reported slowdown from a repeatable single-player
 save point with an event marker. Compare marked frame time, draw count, resource work, guest-thread CPU, and

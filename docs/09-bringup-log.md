@@ -1140,8 +1140,9 @@ Four initial attempts failed with `Connection to 192.168.1.248 failed`; their lo
 `run/net_logs/20261018-214800.log`, and `run/net_logs/20261018-214853.log`. The Switch answered an ICMP
 ping, and the fifth attempt succeeded, transferring all 77,088,965 bytes in
 `run/net_logs/20261018-215038.log`. It started in title-takeover/full-memory mode. The current log confirms
-the title started the APU and opened `BootIntro.xmv`. The user reports that the intro video is working fine
-on this build. This confirms the picture path for the checkpoint, but does not establish whether audio is
-audible or correct; the user's listening result is pending. The nxlink session remains open for the user's
-test. The same artifact can be resent with
+the title started the APU and opened `BootIntro.xmv`. The user confirms that both the intro video and audio
+play correctly on this checkpoint. This is direct hardware listening evidence for the reconstructed
+first-success source state; the runtime log itself records APU startup and movie-file open, not an audio
+measurement. This does not establish whether a later build has the same behavior. The same artifact can be
+resent with
 `NRO=analysis/elf_archive/conker-vulkan_6d26ed5d.nro tools/nxlink_run.sh 192.168.1.248`.

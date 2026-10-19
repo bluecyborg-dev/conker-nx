@@ -21,9 +21,8 @@ exit code 0 and no crash/exception report. It was overclocked and is not a stock
 container, and keep the renderer hot path active alongside the guest CPU investigation.** Diagnostic NRO
 `545de116` is built with `sub_000139D0` counters and optional per-frame GPU timestamps; its next launch will
 also enable profile-2 stack sampling and the hang watchdog. It has not been sent to hardware. The container's
-save route still cannot jump directly to Windmill. The reconstructed first-success audio checkpoint
-`6d26ed5d` has now launched on the Switch; its log shows APU startup and `BootIntro.xmv` opening. The
-user reports that the intro video is working fine on this build; the audio listening result is pending. The
+save route still cannot jump directly to Windmill. The reconstructed first-success checkpoint `6d26ed5d`
+has now launched on the Switch; the user confirms its intro video and audio both play correctly. The
 diagnostic optimization NRO `545de116` remains unsent.
 
 **Builds:** Linux bench `build/linux-vk/conker_recomp`. Latest diagnostic Switch candidate
@@ -327,7 +326,7 @@ and say how.
     bits. A stream segment at `0x7415D7A0` was read from `0x0015D7A0`, the game's code, played as
     full-scale noise.
   - Fix (commit c130f84): addresses in `[0x08000000, 0x80000000)` are VAs. Linux capture: no noise left.
-- [ ] **Intro movie audio stops after under a second** (Switch and Linux).
+- [ ] **Intro movie audio stops after under a second on later/current builds** (Linux; Switch comparison pending).
   - Evidence: `BootIntro.xmv` contains 227 packets and later audio data for all four mono tracks. The game
     initially queues only two ADPCM packets per track (about 0.9 seconds). APU notifications, IRQ 5, the
     deferred procedure call and DirectSound completion callbacks execute, but the stream queue lookup returns
@@ -335,10 +334,12 @@ and say how.
     device PCM: nonzero samples from 0.30–1.40 seconds, then exactly zero through 10 seconds. The log opened
     `BootIntro.xmv`, but has no shared timestamp tying its first frame to the audio sample clock.
   - The early Switch logs show APU initialization and the movie file opening, not a measured soundtrack.
-    The user's recollection of sound during early builds with a black front end remains a useful lead. The
-    initial renderer failure and the guest XMV/DirectSound producer are separate paths. Docker PCM A/B of
-    the pre-`c130f84` and current APU address mapping produced similar nonzero samples for two seconds and
-    exact zero for seconds 2–10 in both captures. This says the VA mapping does not explain the cutoff
+    New hardware evidence: the user confirms both picture and sound play correctly on reconstructed
+    first-success source-state NRO `6d26ed5d` (`52a4270`). This verifies the earlier sound recollection for
+    that checkpoint, but does not establish behavior in the current build. The initial renderer failure and
+    the guest XMV/DirectSound producer are separate paths. The Docker PCM A/B of the pre-`c130f84` and
+    current APU address mapping produced similar nonzero samples for two seconds and exact zero for seconds
+    2–10 in both captures. This says the VA mapping does not explain the cutoff
     duration in this headless route; it cannot verify soundtrack identity, audio quality, or Switch audibility.
     The selected hardware checkpoints are `31500df5` (first successful run), `a43804b` (pre-lifter-fix
     investigation), `1bc623e` (black-scene fix), `c130f84` (high-VA APU fix), and archived `688d985e` as a
@@ -346,17 +347,17 @@ and say how.
     (`52a4270`) has been rebuilt as NRO `6d26ed5d` with a matching unstripped ELF. Its MD5 differs from the
     historical binary, so treat it as a source-state reconstruction. Four nxlink attempts failed, then the
     fifth transferred the NRO and launched it. `run/net_logs/20261018-215038.log` shows the title starting
-    the APU and opening `BootIntro.xmv`. The user reports the intro video works fine on this build; audible
-    output is not measured in the log, and the listening result is pending. Builds from revisions `a43804b`,
-    `1bc623e`, and `c130f84` still need rebuilding;
+    the APU and opening `BootIntro.xmv`. The user confirms both intro video and audio play correctly on this
+    first-success source reconstruction. This establishes sound on that source state, but not on later builds.
+    Builds from revisions `a43804b`, `1bc623e`, and `c130f84` still need rebuilding;
     `688d985e` and its matching ELF are archived. Docker PCM confirms only a short signal burst, not audible
     or correct Switch music.
   - The earlier shader/pipeline-stall explanation is unconfirmed: Linux traces show long early frames with
     zero shader compilations and about 2 ms spent uploading three textures. The configured cache path did not
     resolve the audio cutoff.
-  - Fix/next: unresolved; no safe audio change identified. On a later Switch session, listen to the selected
-    archived/rebuilt checkpoints and correlate PCM time with video start. Then trace the four voices' segment
-    addresses and queue state through the first completion to find why no packet follows packet two. See the
+  - Fix/next: unresolved for later/current builds; no safe audio change identified. Compare the current build
+    with the confirmed-audio source checkpoint `6d26ed5d`, then trace the four voices' segment addresses and
+    queue state through the first completion to find why no packet follows packet two. See the
     2026-10-18 review in [09-bringup-log.md](09-bringup-log.md).
 - [ ] **Intro movie is widened to gameplay aspect** (4:3 source; NRO `3260c845`, Switch verification pending).
   - Cause: the present path expands 640×480 title content to 16:9 when widescreen is enabled.
