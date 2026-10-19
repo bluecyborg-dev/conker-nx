@@ -326,18 +326,24 @@ and say how.
     bits. A stream segment at `0x7415D7A0` was read from `0x0015D7A0`, the game's code, played as
     full-scale noise.
   - Fix (commit c130f84): addresses in `[0x08000000, 0x80000000)` are VAs. Linux capture: no noise left.
-- [ ] **Intro movie audio stops after under a second on later/current builds** (Linux; Switch comparison pending).
+- [ ] **Intro movie audio stops after under a second on some builds** (Switch and Linux; current build comparison open).
   - Evidence: `BootIntro.xmv` contains 227 packets and later audio data for all four mono tracks. The game
     initially queues only two ADPCM packets per track (about 0.9 seconds). APU notifications, IRQ 5, the
     deferred procedure call and DirectSound completion callbacks execute, but the stream queue lookup returns
     no next buffer and no later XMV packet is submitted. A Docker `RECOMP_AUDIO_DUMP` captured 10 seconds of
     device PCM: nonzero samples from 0.30–1.40 seconds, then exactly zero through 10 seconds. The log opened
     `BootIntro.xmv`, but has no shared timestamp tying its first frame to the audio sample clock.
-  - The early Switch logs show APU initialization and the movie file opening, not a measured soundtrack.
-    New hardware evidence: the user confirms both picture and sound play correctly on reconstructed
-    first-success source-state NRO `6d26ed5d` (`52a4270`). This verifies the earlier sound recollection for
-    that checkpoint, but does not establish behavior in the current build. The initial renderer failure and
-    the guest XMV/DirectSound producer are separate paths. The Docker PCM A/B of the pre-`c130f84` and
+  - First explicit failing hardware report reviewed: NRO `e807fd88`, `run/net_logs/20261017-064742.log`;
+    the user reported the intro audio dropped out in under a second. The first `[perf] audio out` summary
+    had peak `16810`; the next three had peak `0`, followed by nonzero peaks later in gameplay. These
+    summaries corroborate brief output and silence, but do not locate the exact cutoff. This run predates
+    `c130f84` and `0d9fb5c`; neither introduced the first observed failure. The early Switch logs only show
+    APU startup and movie open. In a later hardware comparison, the user confirms both picture and sound play
+    correctly on reconstructed first-success source-state NRO `6d26ed5d` (`52a4270`). The confirmed old
+    state and the failed `e807fd88` run bound the behavior to different revisions, but do not identify the
+    exact regression. No APU, DirectSound, or XMV implementation change appears in the source diff from
+    `52a4270` to `66ef96c`. The initial renderer failure and guest XMV/DirectSound producer are separate
+    paths. The Docker PCM A/B of the pre-`c130f84` and
     current APU address mapping produced similar nonzero samples for two seconds and exact zero for seconds
     2–10 in both captures. This says the VA mapping does not explain the cutoff
     duration in this headless route; it cannot verify soundtrack identity, audio quality, or Switch audibility.

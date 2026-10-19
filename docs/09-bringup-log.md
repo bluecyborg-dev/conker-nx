@@ -1006,13 +1006,24 @@ themselves prove how long the intro soundtrack was audible. The user's recollect
 had sound while the main menu was black is retained as a useful observation, distinct from the captured log
 evidence.
 
+The first explicit failing hardware report in the reviewed history is the 2026-10-17 play-through on NRO
+`e807fd88`, logged in `run/net_logs/20261017-064742.log`: the user reported that intro audio disappeared in
+under a second. The log confirms host audio output and title APU startup, and opens `BootIntro.xmv`. Its first
+audio-output summary has a nonzero peak (`16810`); the next three summaries report `peak 0`, before later
+gameplay summaries become nonzero again. These 10-second summaries corroborate a brief output followed by
+silence, but do not timestamp the exact cutoff. This run predates commits `c130f84` and `0d9fb5c`, so neither
+can have introduced the first observed failure. The source diff from the now-confirmed-audio checkpoint
+`52a4270` to `66ef96c` contains no APU, DirectSound, or XMV implementation change, so the exact regression
+is not identified by source history. `0d9fb5c` later redirected the shader cache to Conker's SD folder as a
+proposed way to avoid startup stalls; later traces did not establish that as an audio fix.
+
 The old black front end was independently traced to rendering: the title continued issuing hundreds of
 3D draws while the menu stayed black, and renderer fixes later made the front end visible. That separates the
 menu picture failure from the audio producer at the architectural level. The Switch `video_pump.c` host FMV
 player is Windows-only and is not the Switch movie/audio path; the title's own XMV code feeds DirectSound/APU.
 
 Source history from the first boot commit (`ac33bfb`) to the current tree shows no edits to the DirectSound
-implementation or APU voice processor. The concrete audio-path change was commit `c130f84`, which changed
+implementation or APU voice processor beyond commit `c130f84`, which changed
 `apu_phys()` so addresses in `[0x08000000, 0x80000000)` are read as guest virtual addresses. This fixed
 streamed game sounds whose VAs, such as `0x7415D7A0`, had previously been masked to unrelated low memory.
 It is a specific build difference worth checking against the intro stream segment addresses, but current
