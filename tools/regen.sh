@@ -57,8 +57,10 @@ from pathlib import Path
 import sys
 
 gen = Path(sys.argv[1])
+# src/recomp_manual.c wraps it (NaN points), so it may be emitted as _gen.
 matches = [p for p in gen.glob("recomp_*.c")
-           if "void sub_00355B40(void)" in p.read_text(errors="replace")]
+           if any(f in p.read_text(errors="replace")
+                  for f in ("void sub_00355B40(void)", "void sub_00355B40_gen(void)"))]
 if len(matches) != 1:
     raise SystemExit("expected exactly one generated sub_00355B40 in %s, found %d"
                      % (gen, len(matches)))

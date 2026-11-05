@@ -200,7 +200,7 @@ static GLint to_stored(uint32_t v, uint32_t p, uint32_t l)
     return (GLint)(((uint64_t)v * p + l / 2) / l);
 }
 
-#define GL_MAX_SURF 32
+#define GL_MAX_SURF 128   /* per-object specular maps: see VK_MAX_SURF */
 static GlSurf  s_surf[GL_MAX_SURF];
 static GlSurf *s_last;                  /* last surface drawn or cleared */
 static int     s_drew_any;              /* the title has drawn something */

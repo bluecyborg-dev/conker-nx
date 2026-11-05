@@ -143,11 +143,13 @@ function they patch exists at the same address in our `gen/`, with the same data
 the CPU at **1785 MHz** (GPU 768, memory 1600); our 30 FPS is at stock 1020 MHz (our clock switch,
 `CONKER_CPU_MHZ`, is opt-in).
 
-What they have that we do not (none applied yet):
+What they have that we did not. Applied on 2026-11-05: the `lahf` fix, the two Windmill wrappers (ours
+already guarded the walk; theirs remove the NaN that causes it), the 128-surface pool and the write-combine
+flush no-op. The rest are open.
 
 | Area | Theirs | Why it matters to us |
 |---|---|---|
-| **Lifter: `lahf` after `fcomi`/`fucomi`** | `_lahf_value` builds AH from `g_fp_cmp` for x87 EFLAGS compares (`test_lahf_x87.py`) | Ours leaves it a comment: in `sub_002B0CB0` (`fucomip; fstp; lahf; test ah,0x44; jp`) AH is stale, which in theirs launched the **slingshot pellet at yaw 0**. 2,206 bare `lahf` comments in our `gen/`; regenerate after the fix |
+| **Lifter: `lahf` after `fcomi`/`fucomi`** | `_lahf_value` builds AH from `g_fp_cmp` for x87 EFLAGS compares (`test_lahf_x87.py`) | Ours left it a comment: in `sub_002B0CB0` (`fucomip; fstp; lahf; test ah,0x44; jp`) AH was stale, which in theirs launched the **slingshot pellet at yaw 0**. 51 `lahf` sites were untranslated (the other ~2,200 already were). **Applied 2026-11-05** |
 | Lifter tests | ~90 regression tests (`fprem`, `fist` rounding, flag joins across back edges, rotate carry, SAR width, …), `RECOMP_UNIMPL` with `RECOMP_UNIMPL_TRAP=1` instead of silent comments | Each is a lifter bug class to check against ours |
 | **Windmill freeze** | `0x00355B40` wrapper: a NaN point (from the earth worm cutscene, ~5 s in) is moved to the origin before it enters the collision tree, where the descent looped forever | The user has just reached Windmill on the console |
 | **Earth-worm crash** | `0x00354610` wrapper: a failed nearest-node search (NaN bone transform) returns the first entry instead of `base - 32`, and restores address 0 that the title's assert overwrote | Same area |

@@ -518,6 +518,85 @@ void sub_004CE34C(void)
     esp += 4;
 }
 
+/* ── D3D write-combine flush (0x0053C630) ───────────────────
+ *
+ * Sets PFB +0x100410 bit 16 after an sfence and spins until the hardware
+ * clears it. Guest memory here is coherent: there is nothing to flush, and
+ * the spin only ended when the runtime's spin waits gave up. D3D's PGRAPH
+ * handler calls it for every NOP(12)/(13) trap (a console run logs ~640,000
+ * traps); the other Conker port measured half its executor's time and ~12 %
+ * of the main thread here. Same registers on return as the original
+ * (eax = the PFB base, ecx = the bit), no write, no spin. From
+ * rashevskyv/conker-lr-recomp (MIT); the code layout is the same in PAL. */
+void sub_0053C630(void)
+{
+    eax = MEM32(MEM32(0x005499E8u) + 0x1C28);
+    ecx = 0x10000;
+    esp += 4;                                   /* ret */
+}
+
+/* ── Windmill: NaN points kept out of the collision tree ─────
+ *
+ * 0x00355B40 (stdcall, arg 0 = tree) drains a queue of 32-byte entries
+ * (tree+0x30 base, tree+0x34 count; a point xyzw at +0) into a tree, each
+ * one descending to the child nearest its point (0x00354610). In Windmill a
+ * bone transform of the earth worm turns NaN a few seconds into its
+ * cutscene; a NaN point is nearest to nothing, and the descent then loops
+ * forever (the picture frozen at full CPU) or walks out of its array. Such
+ * a point is put at the origin, and logged. tools/regen.sh still patches the
+ * walk inside this function as a backstop. From rashevskyv/conker-lr-recomp
+ * (MIT). */
+extern void sub_00355B40_gen(void);
+
+void sub_00355B40(void)
+{
+    static unsigned reported;
+    uint32_t tree = MEM32(esp + 4);
+    uint32_t base = MEM32(tree + 0x30), n = MEM32(tree + 0x34), i, k;
+
+    for (i = 0; i < n && i < 4096; i++) {
+        uint32_t e = base + i * 0x20;
+        float x = MEMF(e), y = MEMF(e + 4), z = MEMF(e + 8), w = MEMF(e + 12);
+        if (x == x && y == y && z == z && w == w)
+            continue;
+        if (reported < 8) {
+            reported++;
+            fprintf(stderr, "[nan] collision tree %08X entry %u/%u: point %08X %08X %08X %08X,"
+                            " called from %08X; put at the origin\n",
+                    tree, i, n, MEM32(e), MEM32(e + 4), MEM32(e + 8), MEM32(e + 12),
+                    MEM32(esp));
+        }
+        for (k = 0; k < 4; k++)
+            MEMF(e + k * 4) = 0.0f;
+    }
+    sub_00355B40_gen();
+}
+
+/* ── Nearest-node search: keep a failed result inside its array ──
+ *
+ * 0x00354610 (stdcall: base, query; count in ebx; ret 8) returns
+ * base + best*32 for the node nearest a query transform. When nothing is
+ * nearer than FLT_MAX (a NaN query: best stays -1) it returns base - 32 and
+ * runs the title's debug break `mov dword ptr [0], 1`, which here overwrites
+ * the fake TIB/SEH head the runtime keeps at address 0. Treat the failed
+ * search as "the first entry" (inside the array, so the caller's walk ends
+ * normally) and put address 0 back. From rashevskyv/conker-lr-recomp (MIT). */
+extern void sub_00354610_gen(void);
+
+void sub_00354610(void)
+{
+    uint32_t base = MEM32(esp + 4);
+    uint32_t count = ebx;
+    uint32_t zero = MEM32(0);
+
+    sub_00354610_gen();
+    if (eax != base - 0x20)
+        return;                                 /* an entry was found */
+    MEM32(0) = zero;
+    if (count && base >= 0x00010000u && base < 0x04000000u)
+        eax = base;
+}
+
 /* ── Manual function overrides ─────────────────────────────── */
 
 /*

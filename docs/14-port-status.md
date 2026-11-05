@@ -115,7 +115,12 @@ APU voices in the silent run. This confirms that continued guest-side stream-lis
 audible playback. It does not expose packet IDs, callback addresses, or the result of the guest queue lookup;
 those remain the next instrumentation target.
 
-**Builds:** Linux bench `build/linux-vk/conker_recomp`. New PGRAPH-trace Switch candidate
+**Builds:** Linux bench `build/linux-vk/conker_recomp`. **Newest Switch NRO (2026-11-05):**
+`analysis/elf_archive/conker-vulkan_e8630787.{nro,elf}`: four fixes from rashevskyv/conker-lr-recomp (the
+`lahf` lifter fix with a re-lift, NaN points kept out of the Windmill collision tree plus the nearest-node
+wrapper, 128 render surfaces, the D3D write-combine flush made a no-op). Linux bench: training level clean.
+Not yet run on hardware; it does not include the PGRAPH trace counters' launch arguments by default. Before
+it: PGRAPH-trace Switch candidate
 `analysis/elf_archive/conker-vulkan_bc1df101.{nro,elf}` (NRO MD5 `bc1df1013c9a2f2bd266648b462438d5`,
 matching unstripped ELF MD5 `582b754fe61d7383643a2551058f3266`); staged at
 `build/switch-vk-pgraph-trace-sd/switch/conker/conker-vulkan.nro`. It has not been run on hardware. Enable
@@ -367,6 +372,11 @@ and say how.
     identifies the Windmill event as a worm emerging from the ground and retreating when the player moves
     away; this is a useful route marker, but the diagnostic log has no position/state annotation to align it
     with a frame.
+  - Candidate fix (2026-11-05, NRO `e8630787`): the rashevskyv port traced the same spot to a NaN bone
+    transform of the earth worm (a few seconds into its cutscene): a NaN point is nearest to nothing, so
+    every search fails. Our guard ends the walk, but the NaN point stays queued. `sub_00355B40` now puts
+    NaN points at the origin and logs `[nan] collision tree ...` for each; a hardware run through the worm
+    shows whether NaNs occur here and whether the slowdown goes.
   - Cause and next step: unresolved. The bounded child search and surrounding traversal may still be
     expensive, but that is only a hypothesis. The later profile-2 Windmill capture `022626.log` stopped
     presenting at frame 2,831 and identified a separate guest routine, `sub_000139D0`, as a dominant late
@@ -392,6 +402,8 @@ and say how.
     saturation less likely for the majority of hitches; guest CPU, renderer CPU, or synchronization/waits
     remain possible. The profile shares are not per-frame CPU times, and the exact worm transition is not
     marked, so no specific function is confirmed as the cause.
+  - Candidate (2026-11-05): the NaN fix-up above (`[nan]` lines mark the worm's NaN frames in the log,
+    which also answers the alignment question below).
   - Next step: keep guest semantics unchanged. Mark the worm's emergence, its visible interval, and retreat
     in a repeatable route, then compare adjacent frame times, draw/resource work, guest and renderer samples,
     and synchronization. Retrieve `prof.bin` from the SD card if it remains available. Do not add a loop cap
@@ -420,6 +432,9 @@ and say how.
     instrument that separate game critical section or OHCI. Retrieve the SD-card `prof.bin` if available as
     supporting evidence. Docker startup did not reproduce this Switch stall. Keep the freeze separate from
     the Windmill worm hitches and the former recursive-search slowdown.
+  - Changed nearby (2026-11-05, NRO `e8630787`): D3D's PGRAPH handler calls the write-combine flush
+    `0x0053C630` for every NOP(12)/(13) trap; it is now a no-op instead of a spin on PFB `+0x100410`. Watch
+    whether NOP traps complete faster or the stall changes in the next capture.
 
 - [x] **R5G6B5 shadow-map clears were decoded as cyan** (Linux and Switch renderer path).
   - Culprit: Conker's projected shadows render into 128×128 and 64×64 R5G6B5 (16-bit) surfaces cleared with
@@ -598,18 +613,24 @@ and say how.
     after the last flip presents that buffer, at most every 33 ms (`scanout_present()` in
     `xboxrecomp/src/kernel/nv2a_pb_exec.c`; `RECOMP_SCANOUT_PRESENT=0` turns it off). The Linux bench now
     shows the "Loading..." screen with its progress bar where it showed the menu frozen.
-- [ ] **Slingshot aims at yaw 0** (not seen yet; found by the rashevskyv port, same code layout).
-  - Culprit: our lifter leaves `lahf` after `fcomi`/`fucomi` as a comment; `sub_002B0CB0`
-    (`fucomip; fstp; lahf; test ah,0x44; jp`) reads a stale AH. 2,206 bare `lahf` comments in `gen/`.
-  - Fix: build AH from `g_fp_cmp` for x87 EFLAGS compares (their `_lahf_value`), full regen.
-- [ ] **Windmill: freeze or crash around the earth-worm cutscene** (not seen yet; found by the same port).
-  - Culprit: a NaN bone transform; the collision-tree descent (`0x00355B40` → `0x00354610`) loops forever
-    or walks out of its array.
-  - Fix: their wrappers for `0x00355B40` and `0x00354610` ([03-reference-ports.md](03-reference-ports.md)).
-- [ ] **Shiny objects read an empty surface (green/garbage specular)** (probably Conker's green-yellow head
-  from behind on the bench).
+- [ ] **Slingshot aims at yaw 0** (not seen yet; found by the rashevskyv port, same code layout). **Fixed
+  in code, verify on the console** (NRO `e8630787`).
+  - Culprit: our lifter left `lahf` after `fcomi`/`fucomi` as a comment; `sub_002B0CB0`
+    (`fucomip; fstp; lahf; test ah,0x44; jp`) read a stale AH. 51 `lahf` sites were untranslated.
+  - Fix: `_lahf_value` builds AH from `g_fp_cmp` for x87 EFLAGS compares (`test_lahf_x87.py`); the
+    re-lift translated 43 of the 51 (8 remain, after other flag setters).
+- [ ] **Windmill: NaN points in the collision tree** (the cause the rashevskyv port found behind the
+  recursive-search crash and freeze above; ours were guarded at the walk). **In code, verify on the
+  console** (NRO `e8630787`).
+  - Culprit: a NaN bone transform of the earth worm; the descent (`0x00355B40` → `0x00354610`) cannot
+    place it, and the title's assert in `0x00354610` overwrites address 0 (the runtime's fake TIB/SEH head).
+  - Fix: `sub_00355B40` puts NaN points at the origin (`[nan]` log line); `sub_00354610` turns a failed
+    search into the first entry and restores address 0. The `tools/regen.sh` walk guard stays.
+- [ ] **Shiny objects read an empty surface (green/garbage specular)** (perhaps Conker's green-yellow hood
+  seen from behind on the bench; it is pale after the fix, not confirmed right). **Fixed in code, verify on
+  the console** (NRO `e8630787`).
   - Culprit: `VK_MAX_SURF` 32; ~50 per-object 32×32 specular maps evict each other.
-  - Fix: raise it to 128, as the other port did.
+  - Fix: `VK_MAX_SURF` and `GL_MAX_SURF` 128, as the other port did.
 - [ ] **Minor stutters in the menu and the intro movie** (Switch, user report; low priority). Still some
   very minor stutters with the shader cache in place (NRO `688d985e`); "very very minor" on NRO
   `0678347d`. Main-menu transitions were a bit slow; a lot smoother on NRO `0678347d`.

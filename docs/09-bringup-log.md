@@ -1319,3 +1319,28 @@ the PCM cutoff with no shader compilations. The two new reconstructed NROs have 
 hardware. Next, A/B `a79ad501` and `c0be5d71` on the Switch, using confirmed-audio `6d26ed5d` as the positive
 control, and record whether and when the intro soundtrack stops. No audio code was changed based on this
 comparison.
+
+## 2026-11-05: four fixes from rashevskyv/conker-lr-recomp
+
+After the review of that port (same code layout as our PAL build, see
+[03-reference-ports.md](03-reference-ports.md)), four of its fixes are in:
+
+- **Lifter:** `_lahf_value` builds AH from `g_fp_cmp` after `fcomi`/`fucomi` and their popping forms
+  (ZF, PF, CF as UCOMISS; `test_lahf_x87.py`). Before, 51 `lahf` sites lifted to a bare comment and the
+  following `test ah, 0x44` read a stale AH; in the other port that fired the slingshot at yaw 0
+  (`sub_002B0CB0`). The re-lift (`LIFT_ONLY=1`) translated 43; 8 remain, after other flag setters.
+- **Windmill:** `sub_00355B40` puts NaN points at the origin before they enter the collision tree (a NaN
+  bone transform of the earth worm froze the descent in their port; ours crashed and then froze at the same
+  walk on 2026-10-18, guarded since in `tools/regen.sh`, with the worm hitches and the slowdown at that spot
+  still open: the `[nan]` lines will show whether NaNs reach the tree here); `sub_00354610` returns the first entry for a
+  failed nearest-node search instead of `base - 32` and restores address 0, which the title's assert
+  overwrites. `tools/regen.sh` now finds the walk it patches under either name (`sub_00355B40` or
+  `sub_00355B40_gen`).
+- **Render surfaces:** `VK_MAX_SURF` / `GL_MAX_SURF` 32 → 128 (per-object 32×32 specular maps evicted
+  each other).
+- **D3D write-combine flush** `0x0053C630`: no write, no spin, same registers on return. D3D's PGRAPH
+  handler calls it for every NOP trap (~640,000 in a console run); this touches the path of the open
+  PGRAPH NOP stall, so the next capture should watch it.
+
+Linux bench: training level clean (no `[ICALL]`, crash or `[nan]`, as expected outside Windmill). Console
+NRO `e8630787`.

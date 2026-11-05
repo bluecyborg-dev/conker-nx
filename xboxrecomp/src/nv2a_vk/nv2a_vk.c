@@ -373,7 +373,11 @@ typedef struct {
 } VkDepthBuf;
 static void depth_free(VkDepthBuf *d);
 
-#define VK_MAX_SURF 32
+/* 128: Conker renders a 32x32 specular map per shiny object every frame
+ * (about 50 surfaces in the save menu); with 32 slots they evicted each other
+ * between being drawn and sampled, and objects read an empty surface (found
+ * by rashevskyv/conker-lr-recomp). */
+#define VK_MAX_SURF 128
 #define VK_MAX_DEPTH 16
 
 /* RECOMP_GL_SCALE, as in nv2a_gl: only the pixels behind a surface grow, so
