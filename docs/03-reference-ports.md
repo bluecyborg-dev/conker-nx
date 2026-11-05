@@ -128,3 +128,46 @@ Expect most of them in Conker.
 | `switch-ffmpeg` from devkitPro | GPL; built an LGPL VP6-only FFmpeg instead |
 | `svcCreateSharedMemory` for guest RAM | 0x4201 in Eden, may kill the process on hardware |
 | A libnx framebuffer for a loading screen | `SDL_CreateWindow` hangs forever after one was open |
+
+## rashevskyv/conker-lr-recomp: another Conker port on the same toolkit (reviewed 2026-11-05)
+
+[github.com/rashevskyv/conker-lr-recomp](https://github.com/rashevskyv/conker-lr-recomp), MIT (copyright
+sp00nz for xboxrecomp, antoxa2584x for the FlatOut 2 game layer, rashevskyv for the port). Version 0.53+:
+Switch (Vulkan/NVK and GL), Linux, Windows, Android. Single player playable, "stable 30 fps" on the Switch,
+experimental 60 fps, Hor+ 16:9, free camera, in-game settings menu (Minus). Built from the **NTSC**
+`default.xbe` (SHA-1 `2232a1b3…`); ours is PAL (`68a37f0d…`), **but the code layout is the same**: every
+function they patch exists at the same address in our `gen/`, with the same data addresses inside
+(`0x0084A144`, `0x006C0268`, `0x007FA218` in `sub_002A78D0`/`sub_002A7B60`, `0x0084B868` in
+`sub_003FB030`), and our Beach Dead seed `0x00359E00` is in their seed list. Their game patches
+(`src/recomp_manual.c`) therefore apply to our build almost unchanged. Note that their Switch default runs
+the CPU at **1785 MHz** (GPU 768, memory 1600); our 30 FPS is at stock 1020 MHz (our clock switch,
+`CONKER_CPU_MHZ`, is opt-in).
+
+What they have that we do not (none applied yet):
+
+| Area | Theirs | Why it matters to us |
+|---|---|---|
+| **Lifter: `lahf` after `fcomi`/`fucomi`** | `_lahf_value` builds AH from `g_fp_cmp` for x87 EFLAGS compares (`test_lahf_x87.py`) | Ours leaves it a comment: in `sub_002B0CB0` (`fucomip; fstp; lahf; test ah,0x44; jp`) AH is stale, which in theirs launched the **slingshot pellet at yaw 0**. 2,206 bare `lahf` comments in our `gen/`; regenerate after the fix |
+| Lifter tests | ~90 regression tests (`fprem`, `fist` rounding, flag joins across back edges, rotate carry, SAR width, …), `RECOMP_UNIMPL` with `RECOMP_UNIMPL_TRAP=1` instead of silent comments | Each is a lifter bug class to check against ours |
+| **Windmill freeze** | `0x00355B40` wrapper: a NaN point (from the earth worm cutscene, ~5 s in) is moved to the origin before it enters the collision tree, where the descent looped forever | The user has just reached Windmill on the console |
+| **Earth-worm crash** | `0x00354610` wrapper: a failed nearest-node search (NaN bone transform) returns the first entry instead of `base - 32`, and restores address 0 that the title's assert overwrote | Same area |
+| Garbage tree link diagnostics | `0x00355430` wrapper logs a link outside RAM (a crash after skipping an unskippable cutscene) | Debug aid |
+| **Render-surface pool 128** | `VK_MAX_SURF` 32 → 128: ~50 per-object 32×32 specular maps evicted each other, objects read an empty surface ("green on GL, garbage on Vulkan") | Ours is 32; probably the green-yellow patch on Conker's head seen from behind on our bench |
+| **D3D write-combine flush** `0x0053C630` | Replaced by a no-op (guest memory is coherent): the PGRAPH handler called it for every NOP trap, 410 µs each, half the executor's time in Eden, ~12 % of the main thread | Ours spins in it; our console log shows ~640,000 NOP traps per run |
+| **Vulkan on its own thread** | `RECOMP_VK_THREAD=1` (command recording off the executor), `RECOMP_VK_ASYNC_PRESENT=1` (NVK's Switch WSI waits for the GPU inside `vkQueuePresentKHR`, which held the executor), `RECOMP_VK_KICK=300` (a frame split into several submissions) | Our executor is the busier thread in the 20 FPS stretches |
+| Sleep instead of spin | BlockOnTime sleeps on the semaphore word (condvar from the executor's semaphore release); the idle executor sleeps (`RECOMP_EXEC_SLEEP`) | On the Switch mostly a shorter wake-up latency (they say the lifted wait already slept in 250 µs slices) |
+| Guest DPC ordering | `kdisp_wait` re-enters the guest CPU before declaring a timeout; non-blocking kernel calls inside an ISR/DPC keep the guest lock (tests in `tests/kernel_event_order/`) | Candidate for our intermittent class-screen freeze (a lost wake-up in D3D's wait) |
+| Clean exit on the Switch | Pause every pthread and send the applet Exit before libnx's teardown | Ours has no in-game exit yet |
+| 60 FPS | `0x002A78D0` wrapper: presentation interval 2 → 1 (the game step is time-based) | The 60 FPS goal; needs CPU headroom |
+| Hor+ 16:9 / 21:9 | `0x003FB030` wrapper widens the projection aspect for full-screen perspective contexts only (culling widens too); 2D stays stretched | Real widescreen instead of a stretch |
+| Comfort | Cutscene skip on first viewing (`0x0004FF00`, never the script's unskippable ones), title menu starts on Game 1 (`0x00045730`), camera pitch speed / invert / free camera (`0x002F99A0`), subtitle box size, vignette off, distant grass wind, menu language, rumble, settings menu and `clx_options.txt`, render scale 150 % handheld / 225 % docked | Polish once the essentials are in |
+
+What we have that they do not: the loading-screen present when a title draws into the scanned-out buffer
+(they show their own logo during the first boot instead), the PAL disc, the per-stage console profiler
+reports (`[profile-lr]`, `prof_log_report.py`) and the Linux SIGPROF sampler. Their depth-of-field fix is
+the same as ours (`nv2a_depth_texel_order`: 0x41 for the mask, 0x3F for the composite).
+
+Order to take them in, when work resumes: the `lahf` lifter fix (then a full regen), the Windmill/worm
+wrappers, the 128-surface pool, the write-combine flush no-op, then the Vulkan thread / async present and
+the DPC ordering, measured on the console one at a time. The code is MIT; copy with the notice and credit in
+`THIRD_PARTY`-style notes, as they do for theirs.

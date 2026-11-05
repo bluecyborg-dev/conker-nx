@@ -23,18 +23,50 @@ investigation. The container's save route still cannot jump directly to Windmill
 first-success checkpoint `6d26ed5d` has now launched on the Switch; the user confirms its intro video and
 audio both play correctly.
 
-**Current focus (2026-10-19): isolate the intro movie audio loss.** The first explicit failing report is
-bounded by a pre-report Switch run (`3f85b158`, source state `d386a80`) and the report run (`e807fd88`, source
-state `66ef96c`). The original NRO files are absent, so both have been rebuilt from their source states and
-archived as reconstructions. The positive control remains `6d26ed5d` from `52a4270`, which the user confirmed
-plays both the picture and sound. Compare the two adjacent reconstructions on hardware before changing audio
-code. See the new 2026-10-19 entry in [09-bringup-log.md](09-bringup-log.md).
+**Last milestone (2026-10-19):** a same-argument Switch A/B of silent archived NRO `688d985e` and sound-on
+source reconstruction `c5b8a1f8`, with `RECOMP_APU_VOICES=1`. The four likely XMV voices (`v047–v04A`)
+produce nonzero samples briefly in the silent run, then stop showing sounding activity; in the sound-on run
+they remain active and their playback cursors advance across successive trace windows. Both runs have clean
+audio-device counters. This localizes the difference to guest stream/voice production or handoff before the
+output device, but does not prove the exact queue/refill cause. See the matched logs in [09-bringup-log.md](09-bringup-log.md).
+
+A follow-up with `RECOMP_APU_TRACE=1` provides a more direct indicator: silent `688d985e` sends only the
+initial `SET_VOICE_SSL_A/B` list setup for each intro voice, while sound-on `c5b8a1f8` continues issuing
+dozens of SSL A/B list updates per voice. The APU frontend trace confirms the silent run stops supplying
+updated stream lists to these voices; it still does not identify the XMV packet or guest callback branch that
+fails to refill them. Logs: `run/net_logs/20261019-041650.log` and `run/net_logs/20261019-041816.log`.
+
+**Current focus (2026-10-19): trace the guest XMV/DirectSound packet queue and segment handoff at the first
+voice completion.** The APU register comparison shows that the guest continues to submit SSL list updates in
+the audible build but not the silent one. The source comparison from `8231456` to `a6f9ff2` still shows no audio implementation
+change; only the unrelated Beach Dead hidden-function seed/scanner change was found. The original
+`930c7b25` NRO is absent, so `c5b8a1f8` remains a source-state reconstruction. Preserve that caveat while using
+the voice-state difference to choose the next instrumented boundary. Do not change playback semantics until
+the queue/refill trace identifies a wrong or missing transition. Pre-report reconstruction `a79ad501` remains
+untested. See the 2026-10-19 entries in [09-bringup-log.md](09-bringup-log.md).
+
+**Diagnostic candidate ready (not hardware-tested):** NRO
+`build/switch-vk-audio-trace-targeted-sd/switch/conker/conker-vulkan.nro`, MD5
+`c9e7caa267aabd451830ee901cafce46`, with matching unstripped ELF MD5
+`31fc16bfcef10db24f3916ea9bf2bc12` at
+`build/switch-vk-audio-trace-targeted/conker_recomp.elf`. It traces entry/return state for 13 selected title
+XMV and DirectSound functions, rather than the earlier broad 572-function candidate. Pair it with
+`RECOMP_APU_TRACE=1` and `RECOMP_APU_VOICES=1`; launch arguments are recorded in
+[09-bringup-log.md](09-bringup-log.md). There is no audio fix yet. Docker's daemon was unresponsive, so the
+candidate has not received container validation.
+
+**Archive cleanup (2026-10-20):** `analysis/elf_archive/` now retains only the two user-confirmed intro-audio
+comparison pairs: sound-on reconstruction `c5b8a1f8` and silent `688d985e`. The source diff and hardware A/B
+logs are recorded in [09-bringup-log.md](09-bringup-log.md). Other historical diagnostic archive pairs were
+removed; their findings remain in the logs. Recreating them depends on the corresponding source states being
+available and may not reproduce identical binaries. The current focused trace NRO/ELF remains in `build/`,
+outside the historical archive.
 
 The profile-2/GPU-timing NRO `545de116` was sent to hardware. At the interim check the log had reached at
 least frame 595 without a crash; the final capture is recorded below. The runtime confirmed `sys-clk` was
 active and ignored the `CONKER_*_MHZ` requests, but did not report its selected profile or actual frequencies.
 
-**Last milestone (2026-10-19):** diagnostic NRO `545de116` completed a profile-2/GPU-timing capture in
+**Previous diagnostic milestone (2026-10-19):** diagnostic NRO `545de116` completed a profile-2/GPU-timing capture in
 `run/net_logs/20261019-012749.log`. It visited `Windmill` twice, then reached `MPBeach` and stopped
 presenting after GPU frame 15,085 (7.299 ms). The watchdog reported no presented frame after 20 and 40
 seconds; the log ended on nxlink `Connection reset by peer` without a crash or exception report. The stall
@@ -51,12 +83,37 @@ renderer CPU, or synchronization/wait costs. The user identified the recurring l
 from the ground and retreating when the player moves away. The log does not mark the worm state, so the
 measured hitches cannot yet be tied to that transition.
 
-**Priority 1: compare the intro-audio checkpoints on hardware.** First test the rebuilt pre-report NRO
-`a79ad501`, then the rebuilt report-state NRO `c0be5d71`, keeping the already confirmed-audio
-`6d26ed5d` available as a positive control. Record whether the music plays and when it stops for each. These
-are source-state reconstructions, not the missing original binaries. The MPBeach PGRAPH/guest-lock/OHCI
-freeze and Windmill worm hitches remain open, deferred investigations; retain their existing evidence and
-do not change synchronization or renderer code during this audio comparison.
+**Priority 1: identify why the guest stops refilling the XMV stream lists.** Silent `688d985e` writes only the
+initial `SET_VOICE_SSL_A/B` setup for `v047–v04A`; sound-on `c5b8a1f8` issues dozens of later list updates
+for those voices. Instrument XMV packet submission and DirectSound completion/queue lookup at the first
+divergence, recording packet/segment identity/address/length, voice, callback and lookup result, and guest
+thread. The exact producer-side branch remains unknown. Do not modify playback semantics until the trace
+identifies a wrong or missing transition. The original `930c7b25` NRO is absent, and pre-report `a79ad501`
+remains untested. The MPBeach PGRAPH/guest-lock/OHCI freeze and Windmill worm hitches remain deferred.
+
+**Completed audio diagnostic (2026-10-19):** both checkpoints ran with the same `RECOMP_APU_VOICES=1`
+argument and full-memory title-takeover launch. In silent `688d985e`, `v047–v04A` each show 1,448 processed
+frames and nonzero peak in the first five-second aggregate, with `CBO=0`; per-second sounding counts then
+fall from 5,724 to 60 and then 0. Later aggregates omit these movie voices, and output peak falls from
+16,810 to 0. In sound-on `c5b8a1f8`, the same voices show nonzero peaks, initially 2,897 frames and `CBO=0x800`,
+then 7,520 frames with advancing `CBO` values; per-second sounding counts remain about 6,016 across the
+captured intro. Both logs show zero device gaps, underruns, and dropped buffers. This points before the
+Switch output device, toward guest stream refill/segment handoff or APU voice state. It does not expose XMV
+packet IDs, guest queue decisions, per-stream SSL segment addresses, or final PCM, and therefore does not
+prove the exact cause. Next: add a gated, rate-limited guest-side trace at XMV packet submission and stream
+completion/queue lookup; include packet and segment identity/address/length, voice, callback/lookup result,
+and guest thread. Use this trace to identify the first divergent transition before changing behavior. Logs:
+`run/net_logs/20261019-041027.log` (silent `688d985e`) and `run/net_logs/20261019-041208.log` (sound-on
+`c5b8a1f8`); both were user-confirmed listening results.
+
+**Follow-up front-end trace:** the same pair was rerun with existing `RECOMP_APU_TRACE=1`, no rebuild.
+Silent `688d985e` (`run/net_logs/20261019-041650.log`) contains only the initial two
+`SET_VOICE_SSL_A` and two `SET_VOICE_SSL_B` writes per movie voice `v047–v04A`; no later list updates for
+those voices appear. Sound-on `c5b8a1f8` (`run/net_logs/20261019-041816.log`) contains 62–65 A-list writes
+and 62–64 B-list writes per movie voice across the captured log. The trace remained active and logged other
+APU voices in the silent run. This confirms that continued guest-side stream-list submission correlates with
+audible playback. It does not expose packet IDs, callback addresses, or the result of the guest queue lookup;
+those remain the next instrumentation target.
 
 **Builds:** Linux bench `build/linux-vk/conker_recomp`. New PGRAPH-trace Switch candidate
 `analysis/elf_archive/conker-vulkan_bc1df101.{nro,elf}` (NRO MD5 `bc1df1013c9a2f2bd266648b462438d5`,
@@ -253,6 +310,7 @@ only 3–7 Hz in gameplay while the game held 30 FPS (see the performance issue 
 | 2026-10-18 | Profile-2 Windmill run stopped presenting at frame 2,831; late main-thread samples concentrated in `sub_000139D0` | Switch |
 | 2026-10-18 | Diagnostic Switch NRO `5924ba1f` continued through Windmill and reached MPBeach without the prior frame-2,831 stall; no crash logged | Switch |
 | 2026-10-19 | Profile-2/GPU-timing NRO `545de116` logged two Windmill visits and a multiplayer presentation freeze after frame 15,085, with PGRAPH NOP, guest-lock, and OHCI IRQL evidence | Switch |
+| 2026-10-19 | Matched `RECOMP_APU_VOICES=1` A/B: silent build's movie voices stop sounding; sound-on reconstruction keeps advancing | Switch; user-confirmed A/B |
 
 **Priority (2026-10-19; continuing the 2026-10-17 priority):** keep the game running reliably as soon as
 possible, even if the Linux bench uses a different resolution or aspect ratio from the Switch. Exact
@@ -437,9 +495,18 @@ and say how.
     pre-report `d386a80` → `analysis/elf_archive/conker-vulkan_a79ad501.{nro,elf}` (NRO MD5
     `a79ad50102c5803db4f0c0e4e7b7b1f7`); report state `66ef96c` →
     `analysis/elf_archive/conker-vulkan_c0be5d71.{nro,elf}` (NRO MD5
-    `c0be5d71fa479abaece255c55d5ebb39`). The positive control is the user-confirmed audio checkpoint
-    `analysis/elf_archive/conker-vulkan_6d26ed5d.nro` from `52a4270`. None of these two new reconstructions
-    has yet been tested on hardware.
+    `c0be5d71fa479abaece255c55d5ebb39`). On 2026-10-19 the user confirmed intro sound on `c0be5d71`; it
+    therefore does not reproduce the historical report, while the original `e807fd88` report remains valid.
+    The user also confirmed sound on successor reconstruction `c5b8a1f8` (source `8231456`, historical
+    `930c7b25`), again without reproducing the loss. The user reports no intro sound on historical NROs
+    `0678347d` and `688d985e`, and confirmed sound twice on reconstruction `c5b8a1f8` for `930c7b25`.
+    The source diff from `8231456` to the build's recorded source `a6f9ff2` has no audio changes: it adds one
+    Beach Dead hidden-function seed (`0x0019D3C0`) and changes hidden-entry scanning/vetting to find code after
+    jump tables. Regeneration rises from 21,320 to 21,321 functions. This is the only functional source change
+    found in the interval; it does not call out an intro/audio routine, but indirect translation/layout or
+    timing effects are still possible. The original `930c7b25` binary is missing, so its rebuild cannot prove
+    exact historical behavior. Pre-report `a79ad501` remains untested. The positive control is the user-confirmed audio checkpoint
+    `analysis/elf_archive/conker-vulkan_6d26ed5d.nro` from `52a4270`.
   - The report-state commit `66ef96c` adds hidden-function seeds and profiling/reporting only. The full source
     interval from `d386a80` to `66ef96c` also contains renderer changes and the `fincstp`/`fdecstp` lifter
     correction (`1bc623e`), but no APU, DirectSound, or XMV implementation edits. Regenerated C bodies for
@@ -452,11 +519,36 @@ and say how.
     `16810`, then the next three peaks were zero, with nonzero peaks later in gameplay. This supports brief
     intro output followed by silence, but does not timestamp the precise cutoff. The log showed no device
     gaps, underruns, or dropped buffers. Docker PCM and earlier cache tests do not prove Switch audibility.
-  - Fix/next: unresolved. A/B `a79ad501` and `c0be5d71` on the Switch, with `6d26ed5d` as the confirmed-audio
-    control. If they reproduce the boundary, trace the four voices' segment addresses, queue state, and
-    completion/refill sequence. The earlier first-frame shader-stall explanation remains an unproven
-    hypothesis; later Linux traces captured the cutoff without shader compiles. See the 2026-10-19 entry in
+  - Fix/next: unresolved. The user reports silence on archived NROs `688d985e` and `0678347d`, but heard
+    sound on reconstruction `c5b8a1f8` for source `8231456` twice. The 688 build is mapped to source commit
+    `a6f9ff2`; comparison with `8231456` shows no audio-path edits. The only functional change is the Beach Dead
+    hidden-function seed and jump-table-aware scanner/vetter, taking regeneration from 21,320 to 21,321
+    functions. This appears unrelated to the intro, but an indirect generated-code, layout, or timing effect
+    remains possible. Since original `930c7b25` is absent, the reconstruction cannot confirm the historical
+    binary's sound. The matched `RECOMP_APU_VOICES=1` hardware A/B is now complete: in silent `688d985e`, the
+    four likely XMV voices have nonzero peaks only in the first five-second aggregate (1,448 frames each,
+    `CBO=0`); per-second sounding activity falls from 5,724 to 60 and then zero. In sound-on `c5b8a1f8`, the
+    same voices continue with nonzero peaks and advancing cursors (2,897 frames at `CBO=0x800`, then 7,520
+    frames with later `CBO` values); sounding activity remains near 6,016 frames/s across the intro. Both runs
+    have zero output-device gaps, underruns, and dropped buffers. This narrows the likely failure to guest XMV/
+    DirectSound refill or voice/segment handoff before output submission, but the APU aggregate does not show
+    packet indices, queue decisions, SSL segment addresses, or final PCM, so the exact cause is unresolved.
+    Next: add gated logging at XMV packet submission and stream completion/queue lookup to capture packet and
+    segment identity/address/length, voice, callback and lookup results, and guest thread; find the first
+    divergence before changing playback behavior. The pre-report `a79ad501` remains untested. The earlier
+    first-frame shader-stall explanation remains unproven; later Linux traces captured the cutoff without
+    shader compiles. See the 2026-10-19 entries in [09-bringup-log.md](09-bringup-log.md), including logs
+    `run/net_logs/20261019-041027.log` and `run/net_logs/20261019-041208.log`.
+    Pre-report `a79ad501` remains untested. The earlier first-frame shader-stall explanation remains unproven;
+    later Linux traces captured the cutoff without shader compiles. See the 2026-10-19 entries in
     [09-bringup-log.md](09-bringup-log.md).
+  - Follow-up `RECOMP_APU_TRACE=1` A/B: silent `688d985e` contains only the initial two
+    `SET_VOICE_SSL_A` and two `SET_VOICE_SSL_B` writes per movie voice `v047–v04A`; sound-on `c5b8a1f8`
+    contains 62–65 A-list writes and 62–64 B-list writes per voice across the captured log. This confirms that
+    continued guest-side stream-list submission correlates with audible playback. It does not reveal the guest
+    packet counter, callback address, or queue lookup result. Next: instrument the XMV/DirectSound refill path
+    and locate the first missing list update. Logs: `run/net_logs/20261019-041650.log` and
+    `run/net_logs/20261019-041816.log`.
 - [ ] **Intro movie is widened to gameplay aspect** (4:3 source; NRO `3260c845`, Switch verification pending).
   - Cause: the present path expands 640×480 title content to 16:9 when widescreen is enabled.
   - Fix: both GL and Vulkan now detect the XMV's 640×480 YUY2/UYVY texture (`0x24`/`0x25`, pitch 1280)
@@ -506,6 +598,18 @@ and say how.
     after the last flip presents that buffer, at most every 33 ms (`scanout_present()` in
     `xboxrecomp/src/kernel/nv2a_pb_exec.c`; `RECOMP_SCANOUT_PRESENT=0` turns it off). The Linux bench now
     shows the "Loading..." screen with its progress bar where it showed the menu frozen.
+- [ ] **Slingshot aims at yaw 0** (not seen yet; found by the rashevskyv port, same code layout).
+  - Culprit: our lifter leaves `lahf` after `fcomi`/`fucomi` as a comment; `sub_002B0CB0`
+    (`fucomip; fstp; lahf; test ah,0x44; jp`) reads a stale AH. 2,206 bare `lahf` comments in `gen/`.
+  - Fix: build AH from `g_fp_cmp` for x87 EFLAGS compares (their `_lahf_value`), full regen.
+- [ ] **Windmill: freeze or crash around the earth-worm cutscene** (not seen yet; found by the same port).
+  - Culprit: a NaN bone transform; the collision-tree descent (`0x00355B40` → `0x00354610`) loops forever
+    or walks out of its array.
+  - Fix: their wrappers for `0x00355B40` and `0x00354610` ([03-reference-ports.md](03-reference-ports.md)).
+- [ ] **Shiny objects read an empty surface (green/garbage specular)** (probably Conker's green-yellow head
+  from behind on the bench).
+  - Culprit: `VK_MAX_SURF` 32; ~50 per-object 32×32 specular maps evict each other.
+  - Fix: raise it to 128, as the other port did.
 - [ ] **Minor stutters in the menu and the intro movie** (Switch, user report; low priority). Still some
   very minor stutters with the shader cache in place (NRO `688d985e`); "very very minor" on NRO
   `0678347d`. Main-menu transitions were a bit slow; a lot smoother on NRO `0678347d`.
